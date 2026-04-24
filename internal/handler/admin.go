@@ -45,7 +45,7 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalPages := (total + limit - 1) / limit
-	response.OKWithMeta(w, result, response.Meta{
+	response.OKWithMeta(w, "Berhasil mendapatkan daftar user", result, response.Meta{
 		Page:       page,
 		Limit:      limit,
 		Total:      total,
@@ -81,7 +81,7 @@ func (h *AdminHandler) UpdateUserStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	response.OK(w, map[string]any{"message": "user status updated"})
+	response.OK(w, "Status user berhasil diperbarui", nil)
 }
 
 // GET /api/v1/admin/audit-logs
@@ -126,7 +126,7 @@ func (h *AdminHandler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalPages := (total + limit - 1) / limit
-	response.OKWithMeta(w, result, response.Meta{
+	response.OKWithMeta(w, "Berhasil mendapatkan audit log", result, response.Meta{
 		Page:       page,
 		Limit:      limit,
 		Total:      total,
@@ -150,7 +150,7 @@ func (h *AdminHandler) ListOrders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalPages := (total + limit - 1) / limit
-	response.OKWithMeta(w, toOrderListResponse(orders), response.Meta{
+	response.OKWithMeta(w, "Berhasil mendapatkan daftar order", toOrderListResponse(orders), response.Meta{
 		Page:       page,
 		Limit:      limit,
 		Total:      total,

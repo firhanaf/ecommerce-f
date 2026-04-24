@@ -50,17 +50,19 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Phone:    req.Phone,
 	})
 	if err != nil {
-		if errors.Is(err, authUC.ErrEmailAlreadyExists) {
+		switch {
+		case errors.Is(err, authUC.ErrEmailAlreadyExists):
 			response.Conflict(w, err.Error())
-			return
+		case errors.Is(err, authUC.ErrPhoneAlreadyExists):
+			response.Conflict(w, err.Error())
+		default:
+			response.InternalError(w)
 		}
-		response.InternalError(w)
 		return
 	}
 
-	response.Created(w, map[string]any{
+	response.Created(w, "Registrasi berhasil, silakan kirim OTP untuk verifikasi nomor WhatsApp Anda", map[string]any{
 		"user_id": result.UserID,
-		"message": result.Message,
 	})
 }
 
@@ -89,18 +91,22 @@ func (h *AuthHandler) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.authUC.VerifyOTP(r.Context(), userID, req.Code)
 	if err != nil {
-		if errors.Is(err, authUC.ErrInvalidOTP) {
-			response.JSON(w, http.StatusUnprocessableEntity, response.Response{
-				Success: false,
-				Error:   err.Error(),
+		switch {
+		case errors.Is(err, authUC.ErrInvalidOTP):
+			response.UnprocessableEntity(w, err.Error())
+		case errors.Is(err, authUC.ErrOTPMaxAttempts):
+			response.JSON(w, http.StatusTooManyRequests, response.Response{
+				Code:    http.StatusTooManyRequests,
+				Message: err.Error(),
+				Data:    nil,
 			})
-			return
+		default:
+			response.InternalError(w)
 		}
-		response.InternalError(w)
 		return
 	}
 
-	response.OK(w, map[string]any{
+	response.OK(w, "Verifikasi OTP berhasil", map[string]any{
 		"user":          toUserResponse(result.User),
 		"access_token":  result.AccessToken,
 		"refresh_token": result.RefreshToken,
@@ -126,26 +132,21 @@ func (h *AuthHandler) ResendOTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.authUC.ResendOTP(r.Context(), userID); err != nil {
 		if errors.Is(err, authUC.ErrOTPRateLimited) {
-			response.JSON(w, http.StatusTooManyRequests, response.Response{
-				Success: false,
-				Error:   err.Error(),
-			})
+			response.TooManyRequests(w, err.Error())
 			return
 		}
 		response.BadRequest(w, err.Error())
 		return
 	}
 
-	response.OK(w, map[string]any{
-		"message": "OTP berhasil dikirim ulang ke WhatsApp Anda",
-	})
+	response.OK(w, "OTP berhasil dikirim ulang ke WhatsApp Anda", nil)
 }
 
 // POST /api/v1/auth/login
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Identifier string `json:"identifier"` // email atau nomor HP
+		Password   string `json:"password"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -153,33 +154,37 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Identifier == "" || req.Password == "" {
+		response.BadRequest(w, "identifier and password are required")
+		return
+	}
+
 	result, err := h.authUC.Login(r.Context(), authUC.LoginInput{
-		Email:    req.Email,
-		Password: req.Password,
+		Identifier: req.Identifier,
+		Password:   req.Password,
 	})
 	if err != nil {
-		// Cek apakah error phone_not_verified (format: "err:userID")
 		if errors.Is(err, authUC.ErrPhoneNotVerified) {
-			// Extract user_id dari error message untuk keperluan resend OTP di frontend
 			parts := strings.SplitN(err.Error(), ":", 2)
 			userID := ""
 			if len(parts) == 2 {
 				userID = parts[1]
 			}
 			response.JSON(w, http.StatusForbidden, response.Response{
-				Success: false,
-				Error:   "phone_not_verified",
+				Code:    http.StatusForbidden,
+				Message: "Silakan verifikasi nomor WhatsApp Anda terlebih dahulu",
 				Data: map[string]any{
 					"user_id": userID,
-					"message": "Silakan verifikasi nomor WhatsApp Anda terlebih dahulu",
+					"reason":  "phone_not_verified",
 				},
 			})
 			return
 		}
 		if errors.Is(err, authUC.ErrInvalidCredentials) || errors.Is(err, authUC.ErrUserInactive) {
 			response.JSON(w, http.StatusUnauthorized, response.Response{
-				Success: false,
-				Error:   err.Error(),
+				Code:    http.StatusUnauthorized,
+				Message: err.Error(),
+				Data:    nil,
 			})
 			return
 		}
@@ -187,7 +192,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, map[string]any{
+	response.OK(w, "Login berhasil", map[string]any{
 		"user":          toUserResponse(result.User),
 		"access_token":  result.AccessToken,
 		"refresh_token": result.RefreshToken,
@@ -211,7 +216,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, map[string]any{
+	response.OK(w, "Token berhasil diperbarui", map[string]any{
 		"access_token":  result.AccessToken,
 		"refresh_token": result.RefreshToken,
 	})

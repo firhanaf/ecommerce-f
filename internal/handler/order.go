@@ -64,17 +64,14 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, orderUC.ErrAddressNotFound):
 			response.NotFound(w, "address")
 		case errors.Is(err, orderUC.ErrInsufficientStock):
-			response.JSON(w, http.StatusUnprocessableEntity, response.Response{
-				Success: false,
-				Error:   err.Error(),
-			})
+			response.UnprocessableEntity(w, err.Error())
 		default:
 			response.InternalError(w)
 		}
 		return
 	}
 
-	response.Created(w, toOrderResponse(order))
+	response.Created(w, "Order berhasil dibuat", toOrderResponse(order))
 }
 
 // GET /api/v1/orders — Daftar order milik buyer
@@ -93,7 +90,7 @@ func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalPages := (total + limit - 1) / limit
-	response.OKWithMeta(w, toOrderListResponse(orders), response.Meta{
+	response.OKWithMeta(w, "Berhasil mendapatkan daftar order", toOrderListResponse(orders), response.Meta{
 		Page:       page,
 		Limit:      limit,
 		Total:      total,
@@ -129,7 +126,7 @@ func (h *OrderHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, toOrderResponse(order))
+	response.OK(w, "Berhasil mendapatkan detail order", toOrderResponse(order))
 }
 
 // GET /api/v1/seller/orders — Daftar semua order (untuk seller/admin)
@@ -153,7 +150,7 @@ func (h *OrderHandler) ListSeller(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalPages := (total + limit - 1) / limit
-	response.OKWithMeta(w, toOrderListResponse(orders), response.Meta{
+	response.OKWithMeta(w, "Berhasil mendapatkan daftar order", toOrderListResponse(orders), response.Meta{
 		Page:       page,
 		Limit:      limit,
 		Total:      total,
@@ -204,7 +201,7 @@ func (h *OrderHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, map[string]any{"message": "order status updated"})
+	response.OK(w, "Status order berhasil diperbarui", nil)
 }
 
 // POST /api/v1/seller/orders/{id}/shipment
@@ -251,7 +248,7 @@ func (h *OrderHandler) CreateShipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.Created(w, toShipmentResponse(shipment))
+	response.Created(w, "Shipment berhasil dibuat", toShipmentResponse(shipment))
 }
 
 // ─── Response Mappers ─────────────────────────────────────────────────────────

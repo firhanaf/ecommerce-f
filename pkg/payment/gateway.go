@@ -1,23 +1,26 @@
 package payment
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha512"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 )
 
 // ─── Interface ───────────────────────────────────────────────────────────────
-// Mau ganti ke Xendit, Stripe, atau gateway lain?
-// Cukup buat struct baru yang implement PaymentGateway.
 
 type CreateChargeRequest struct {
-	OrderID     string
-	Amount      float64
+	OrderID       string
+	Amount        float64
 	CustomerName  string
 	CustomerEmail string
 	CustomerPhone string
-	Items       []ChargeItem
-	ExpiredAt   time.Time
+	Items         []ChargeItem
+	ExpiredAt     time.Time
 }
 
 type ChargeItem struct {
@@ -28,8 +31,8 @@ type ChargeItem struct {
 
 type CreateChargeResponse struct {
 	TransactionID string
-	RedirectURL   string // URL untuk pembayaran (Midtrans Snap)
-	Token         string // Snap token
+	RedirectURL   string
+	Token         string
 	ExpiredAt     time.Time
 	RawResponse   map[string]any
 }
@@ -37,7 +40,7 @@ type CreateChargeResponse struct {
 type WebhookPayload struct {
 	TransactionID     string
 	OrderID           string
-	TransactionStatus string // "settlement", "cancel", "expire", dll
+	TransactionStatus string
 	PaymentType       string
 	RawPayload        map[string]any
 }
@@ -45,16 +48,16 @@ type WebhookPayload struct {
 type PaymentGateway interface {
 	CreateCharge(ctx context.Context, req CreateChargeRequest) (*CreateChargeResponse, error)
 	ParseWebhook(payload []byte) (*WebhookPayload, error)
-	VerifyWebhookSignature(payload map[string]any, signature string) bool
+	VerifyWebhookSignature(payload map[string]any) bool
 }
 
 // ─── Midtrans Implementation ─────────────────────────────────────────────────
-// Midtrans Snap API (pembayaran via popup atau redirect)
 
 type midtransGateway struct {
 	serverKey  string
 	production bool
 	baseURL    string
+	httpClient *http.Client
 }
 
 func NewMidtransGateway(serverKey string, production bool) PaymentGateway {
@@ -62,40 +65,132 @@ func NewMidtransGateway(serverKey string, production bool) PaymentGateway {
 	if production {
 		baseURL = "https://app.midtrans.com"
 	}
-
 	return &midtransGateway{
 		serverKey:  serverKey,
 		production: production,
 		baseURL:    baseURL,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
+// CreateCharge membuat transaksi Snap di Midtrans dan mengembalikan snap_token
 func (m *midtransGateway) CreateCharge(ctx context.Context, req CreateChargeRequest) (*CreateChargeResponse, error) {
-	// Catatan: di implementasi nyata, gunakan HTTP client untuk hit Midtrans Snap API
-	// https://snap-docs.midtrans.com/#create-transaction
-	//
-	// Contoh payload:
-	// {
-	//   "transaction_details": { "order_id": req.OrderID, "gross_amount": req.Amount },
-	//   "customer_details": { "first_name": req.CustomerName, "email": req.CustomerEmail },
-	//   "item_details": [...],
-	//   "expiry": { "duration": 24, "unit": "hours" }
-	// }
+	items := make([]map[string]any, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, map[string]any{
+			"id":       item.Name,
+			"name":     item.Name,
+			"price":    int64(item.Price),
+			"quantity": item.Quantity,
+		})
+	}
 
-	// Placeholder — implementasi HTTP call ke Midtrans
-	_ = fmt.Sprintf("%s/snap/v1/transactions", m.baseURL)
+	payload := map[string]any{
+		"transaction_details": map[string]any{
+			"order_id":     req.OrderID,
+			"gross_amount": int64(req.Amount),
+		},
+		"item_details": items,
+		"expiry": map[string]any{
+			"duration": 24,
+			"unit":     "hours",
+		},
+	}
 
-	return &CreateChargeResponse{}, nil
+	if req.CustomerName != "" || req.CustomerEmail != "" {
+		payload["customer_details"] = map[string]any{
+			"first_name": req.CustomerName,
+			"email":      req.CustomerEmail,
+			"phone":      req.CustomerPhone,
+		}
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("midtrans: marshal payload: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		m.baseURL+"/snap/v1/transactions",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("midtrans: build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.SetBasicAuth(m.serverKey, "")
+
+	resp, err := m.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("midtrans: send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Token       string `json:"token"`
+		RedirectURL string `json:"redirect_url"`
+		// Error response
+		ErrorMessages []string `json:"error_messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("midtrans: decode response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("midtrans: unexpected status %d: %v", resp.StatusCode, result.ErrorMessages)
+	}
+
+	return &CreateChargeResponse{
+		Token:       result.Token,
+		RedirectURL: result.RedirectURL,
+	}, nil
 }
 
+// ParseWebhook mem-parse payload JSON dari Midtrans notification
 func (m *midtransGateway) ParseWebhook(payload []byte) (*WebhookPayload, error) {
-	// Parse JSON payload dari Midtrans webhook
-	// Field penting: transaction_id, order_id, transaction_status, payment_type
-	return &WebhookPayload{}, nil
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, fmt.Errorf("midtrans: parse webhook: %w", err)
+	}
+
+	getString := func(key string) string {
+		if v, ok := raw[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	return &WebhookPayload{
+		TransactionID:     getString("transaction_id"),
+		OrderID:           getString("order_id"),
+		TransactionStatus: getString("transaction_status"),
+		PaymentType:       getString("payment_type"),
+		RawPayload:        raw,
+	}, nil
 }
 
-func (m *midtransGateway) VerifyWebhookSignature(payload map[string]any, signature string) bool {
-	// Midtrans signature: SHA512(order_id + status_code + gross_amount + server_key)
-	// Verifikasi sebelum proses webhook untuk keamanan
-	return true
+// VerifyWebhookSignature memverifikasi signature dari Midtrans
+// Formula: SHA512(order_id + status_code + gross_amount + server_key)
+func (m *midtransGateway) VerifyWebhookSignature(payload map[string]any) bool {
+	getString := func(key string) string {
+		if v, ok := payload[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	orderID := getString("order_id")
+	statusCode := getString("status_code")
+	grossAmount := getString("gross_amount")
+	signatureKey := getString("signature_key")
+
+	if signatureKey == "" {
+		return false
+	}
+
+	raw := orderID + statusCode + grossAmount + m.serverKey
+	hash := sha512.Sum512([]byte(raw))
+	expected := hex.EncodeToString(hash[:])
+
+	return expected == signatureKey
 }

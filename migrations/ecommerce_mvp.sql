@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
     email          VARCHAR(255) NOT NULL UNIQUE,
     password_hash  TEXT         NOT NULL,
     role           VARCHAR(20)  NOT NULL DEFAULT 'buyer'
-                     CHECK (role IN ('buyer', 'seller', 'admin')),
-    phone          VARCHAR(20),
+                     CHECK (role IN ('buyer', 'admin')),
+    phone          VARCHAR(20)  UNIQUE,
     avatar_url     TEXT,
     is_active      BOOLEAN      NOT NULL DEFAULT true,
     phone_verified BOOLEAN      NOT NULL DEFAULT false,
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS otp_tokens (
     type       VARCHAR(30) NOT NULL CHECK (type IN ('phone_verification', 'reset_password')),
     expires_at TIMESTAMPTZ NOT NULL,
     used_at    TIMESTAMPTZ,
+    attempts   INT         NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

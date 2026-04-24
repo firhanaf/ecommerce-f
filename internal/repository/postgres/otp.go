@@ -23,8 +23,8 @@ func NewOTPRepository(db *pgxpool.Pool) repository.OTPRepository {
 
 func (r *otpRepository) Create(ctx context.Context, otp *domain.OTPToken) error {
 	query := `
-		INSERT INTO otp_tokens (id, user_id, code, type, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO otp_tokens (id, user_id, code, type, expires_at, attempts, created_at)
+		VALUES ($1, $2, $3, $4, $5, 0, $6)
 	`
 	_, err := r.db.Exec(ctx, query,
 		otp.ID, otp.UserID, otp.Code, otp.Type,
@@ -39,7 +39,7 @@ func (r *otpRepository) Create(ctx context.Context, otp *domain.OTPToken) error 
 // FindLatest mengambil OTP terbaru yang belum dipakai untuk user + type tertentu
 func (r *otpRepository) FindLatest(ctx context.Context, userID uuid.UUID, otpType string) (*domain.OTPToken, error) {
 	query := `
-		SELECT id, user_id, code, type, expires_at, used_at, created_at
+		SELECT id, user_id, code, type, expires_at, used_at, attempts, created_at
 		FROM otp_tokens
 		WHERE user_id = $1 AND type = $2 AND used_at IS NULL
 		ORDER BY created_at DESC
@@ -48,7 +48,7 @@ func (r *otpRepository) FindLatest(ctx context.Context, userID uuid.UUID, otpTyp
 	var otp domain.OTPToken
 	err := r.db.QueryRow(ctx, query, userID, otpType).Scan(
 		&otp.ID, &otp.UserID, &otp.Code, &otp.Type,
-		&otp.ExpiresAt, &otp.UsedAt, &otp.CreatedAt,
+		&otp.ExpiresAt, &otp.UsedAt, &otp.Attempts, &otp.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -57,6 +57,12 @@ func (r *otpRepository) FindLatest(ctx context.Context, userID uuid.UUID, otpTyp
 		return nil, fmt.Errorf("otpRepository.FindLatest: %w", err)
 	}
 	return &otp, nil
+}
+
+func (r *otpRepository) IncrementAttempts(ctx context.Context, id uuid.UUID) error {
+	query := `UPDATE otp_tokens SET attempts = attempts + 1 WHERE id = $1`
+	_, err := r.db.Exec(ctx, query, id)
+	return err
 }
 
 func (r *otpRepository) MarkUsed(ctx context.Context, id uuid.UUID) error {

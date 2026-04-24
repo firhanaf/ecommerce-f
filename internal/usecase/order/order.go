@@ -109,6 +109,7 @@ func (uc *useCase) Checkout(ctx context.Context, input CreateOrderInput) (*domai
 
 	// 4. Build order items + validasi stok + hitung subtotal
 	var orderItems []domain.OrderItem
+	var decrements []repository.StockDecrement
 	var subtotal int64
 
 	for _, cartItem := range cart.Items {
@@ -126,22 +127,20 @@ func (uc *useCase) Checkout(ctx context.Context, input CreateOrderInput) (*domai
 			ProductName: cartItem.Product.Name,
 			VariantName: variant.Name,
 			Quantity:    cartItem.Quantity,
-			UnitPrice:   variant.Price, // harga di-snapshot saat checkout
+			UnitPrice:   variant.Price,
 			Subtotal:    itemSubtotal,
 			CreatedAt:   time.Now(),
+		})
+
+		decrements = append(decrements, repository.StockDecrement{
+			VariantID: cartItem.VariantID,
+			Quantity:  cartItem.Quantity,
 		})
 	}
 
 	total := subtotal + input.ShippingCost
 
-	// 5. Decrement stok (atomic di DB level)
-	for _, cartItem := range cart.Items {
-		if err := uc.variantRepo.DecrementStock(ctx, cartItem.VariantID, cartItem.Quantity); err != nil {
-			return nil, ErrInsufficientStock
-		}
-	}
-
-	// 6. Buat order
+	// 5. Buat order
 	now := time.Now()
 	order := &domain.Order{
 		ID:              uuid.New(),
@@ -160,7 +159,8 @@ func (uc *useCase) Checkout(ctx context.Context, input CreateOrderInput) (*domai
 		UpdatedAt:       now,
 	}
 
-	if err := uc.orderRepo.Create(ctx, order); err != nil {
+	// order + order_items + stock decrement dalam satu transaksi DB
+	if err := uc.orderRepo.Create(ctx, order, decrements); err != nil {
 		return nil, fmt.Errorf("create order: %w", err)
 	}
 
@@ -252,7 +252,7 @@ func (uc *useCase) CreateShipment(ctx context.Context, input CreateShipmentInput
 	uc.auditRepo.Create(ctx, &domain.AuditLog{
 		ID:         uuid.New(),
 		ActorID:    &actorID,
-		ActorRole:  "seller",
+		ActorRole:  "admin",
 		Action:     domain.AuditCreate,
 		EntityType: "shipments",
 		EntityID:   &shipment.ID,

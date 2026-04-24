@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"time"
 
+	"strings"
+
 	"ecommerce-api/internal"
 	"ecommerce-api/internal/repository"
 	"ecommerce-api/pkg/jwt"
@@ -26,8 +28,8 @@ type RegisterInput struct {
 }
 
 type LoginInput struct {
-	Email    string
-	Password string
+	Identifier string // email atau nomor HP
+	Password   string
 }
 
 type AuthResult struct {
@@ -43,12 +45,16 @@ type RegisterResult struct {
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
+const maxOTPAttempts = 5
+
 var (
 	ErrEmailAlreadyExists = errors.New("email already registered")
-	ErrInvalidCredentials = errors.New("invalid email or password")
+	ErrPhoneAlreadyExists = errors.New("phone number already registered")
+	ErrInvalidCredentials = errors.New("invalid email/phone or password")
 	ErrUserInactive       = errors.New("user account is inactive")
 	ErrPhoneNotVerified   = errors.New("phone number not verified")
 	ErrInvalidOTP         = errors.New("invalid or expired OTP code")
+	ErrOTPMaxAttempts     = errors.New("OTP has been invalidated due to too many failed attempts")
 	ErrOTPRateLimited     = errors.New("too many OTP requests, please wait before retrying")
 	ErrPhoneRequired      = errors.New("phone number is required for verification")
 )
@@ -96,10 +102,19 @@ func (uc *useCase) Register(ctx context.Context, input RegisterInput) (*Register
 		return nil, ErrPhoneRequired
 	}
 
+	// Normalisasi phone ke format 62xxx sebelum disimpan
+	normalizedPhone := pkgotp.NormalizePhone(input.Phone)
+
 	// Cek duplikat email
 	existing, _ := uc.userRepo.FindByEmail(ctx, input.Email)
 	if existing != nil {
 		return nil, ErrEmailAlreadyExists
+	}
+
+	// Cek duplikat phone
+	existingPhone, _ := uc.userRepo.FindByPhone(ctx, normalizedPhone)
+	if existingPhone != nil {
+		return nil, ErrPhoneAlreadyExists
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
@@ -114,7 +129,7 @@ func (uc *useCase) Register(ctx context.Context, input RegisterInput) (*Register
 		Email:         input.Email,
 		PasswordHash:  string(hash),
 		Role:          domain.RoleBuyer,
-		Phone:         input.Phone,
+		Phone:         normalizedPhone,
 		IsActive:      true,
 		PhoneVerified: false, // blocked sampai OTP verified
 		CreatedAt:     now,
@@ -123,13 +138,6 @@ func (uc *useCase) Register(ctx context.Context, input RegisterInput) (*Register
 
 	if err := uc.userRepo.Create(ctx, user); err != nil {
 		return nil, err
-	}
-
-	// Kirim OTP ke WA
-	if err := uc.sendOTP(ctx, user.ID, user.Phone, domain.OTPTypePhoneVerification); err != nil {
-		// Jangan gagalkan register hanya karena OTP gagal kirim
-		// User masih bisa pakai ResendOTP
-		fmt.Printf("WARNING: failed to send OTP to %s: %v\n", user.Phone, err)
 	}
 
 	uc.auditRepo.Create(ctx, &domain.AuditLog{
@@ -151,7 +159,15 @@ func (uc *useCase) Register(ctx context.Context, input RegisterInput) (*Register
 
 // Login blocked jika phone belum diverifikasi
 func (uc *useCase) Login(ctx context.Context, input LoginInput) (*AuthResult, error) {
-	user, err := uc.userRepo.FindByEmail(ctx, input.Email)
+	var user *domain.User
+	var err error
+
+	if strings.Contains(input.Identifier, "@") {
+		user, err = uc.userRepo.FindByEmail(ctx, input.Identifier)
+	} else {
+		user, err = uc.userRepo.FindByPhone(ctx, pkgotp.NormalizePhone(input.Identifier))
+	}
+
 	if err != nil || user == nil {
 		return nil, ErrInvalidCredentials
 	}
@@ -222,8 +238,18 @@ func (uc *useCase) VerifyOTP(ctx context.Context, userID uuid.UUID, code string)
 		return nil, ErrInvalidOTP
 	}
 
-	// Cek kode
+	// Cek apakah sudah melebihi max attempts
+	if otp.Attempts >= maxOTPAttempts {
+		return nil, ErrOTPMaxAttempts
+	}
+
+	// Cek kode — salah: increment attempts, kalau sudah mentok invalidate OTP
 	if otp.Code != code {
+		_ = uc.otpRepo.IncrementAttempts(ctx, otp.ID)
+		if otp.Attempts+1 >= maxOTPAttempts {
+			_ = uc.otpRepo.MarkUsed(ctx, otp.ID)
+			return nil, ErrOTPMaxAttempts
+		}
 		return nil, ErrInvalidOTP
 	}
 

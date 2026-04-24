@@ -10,9 +10,8 @@ import (
 type UserRole string
 
 const (
-	RoleBuyer  UserRole = "buyer"
-	RoleSeller UserRole = "seller"
-	RoleAdmin  UserRole = "admin"
+	RoleBuyer UserRole = "buyer"
+	RoleAdmin UserRole = "admin"
 )
 
 type User struct {
@@ -43,6 +42,7 @@ type OTPToken struct {
 	Type      string
 	ExpiresAt time.Time
 	UsedAt    *time.Time
+	Attempts  int
 	CreatedAt time.Time
 }
 

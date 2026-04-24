@@ -57,6 +57,16 @@ func (r *userRepository) FindByEmail(ctx context.Context, email string) (*domain
 	return scanUser(row)
 }
 
+func (r *userRepository) FindByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	query := `
+		SELECT id, name, email, password_hash, role, phone, avatar_url, is_active, phone_verified, created_at, updated_at
+		FROM users
+		WHERE phone = $1
+	`
+	row := r.db.QueryRow(ctx, query, phone)
+	return scanUser(row)
+}
+
 func (r *userRepository) Update(ctx context.Context, user *domain.User) error {
 	query := `
 		UPDATE users

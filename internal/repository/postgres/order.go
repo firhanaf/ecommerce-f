@@ -23,30 +23,26 @@ func NewOrderRepository(db *pgxpool.Pool) repository.OrderRepository {
 	return &orderRepository{db: db}
 }
 
-// Create menggunakan DB transaction:
-// order + order_items harus sukses semua atau rollback semua
-func (r *orderRepository) Create(ctx context.Context, order *domain.Order) error {
+// Create menyimpan order + order_items + decrement stok dalam satu transaksi DB.
+// Jika salah satu gagal, semua di-rollback — tidak ada stok berkurang tanpa order.
+func (r *orderRepository) Create(ctx context.Context, order *domain.Order, decrements []repository.StockDecrement) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("orderRepository.Create begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) // no-op kalau sudah Commit
+	defer tx.Rollback(ctx)
 
-	// Simpan snapshot alamat sebagai JSONB
 	snapshotJSON, err := json.Marshal(order.SnapshotAddress)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot address: %w", err)
 	}
 
-	// Insert order
-	orderQuery := `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO orders (
 			id, user_id, address_id, snapshot_address, status,
 			subtotal, shipping_cost, total, courier, courier_service,
 			notes, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-	`
-	_, err = tx.Exec(ctx, orderQuery,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		order.ID, order.UserID, order.AddressID, snapshotJSON,
 		order.Status, order.Subtotal, order.ShippingCost, order.Total,
 		order.Courier, order.CourierService, order.Notes,
@@ -56,14 +52,7 @@ func (r *orderRepository) Create(ctx context.Context, order *domain.Order) error
 		return fmt.Errorf("insert order: %w", err)
 	}
 
-	// Batch insert order_items — lebih efisien dari loop satu-satu
 	if len(order.Items) > 0 {
-		itemQuery := `
-			INSERT INTO order_items (
-				id, order_id, variant_id, product_name, variant_name,
-				product_image, quantity, unit_price, subtotal, created_at
-			) VALUES `
-
 		valueStrings := make([]string, 0, len(order.Items))
 		valueArgs := make([]any, 0, len(order.Items)*10)
 		argIdx := 1
@@ -82,9 +71,30 @@ func (r *orderRepository) Create(ctx context.Context, order *domain.Order) error
 			argIdx += 10
 		}
 
-		_, err = tx.Exec(ctx, itemQuery+strings.Join(valueStrings, ","), valueArgs...)
+		_, err = tx.Exec(ctx,
+			`INSERT INTO order_items (
+				id, order_id, variant_id, product_name, variant_name,
+				product_image, quantity, unit_price, subtotal, created_at
+			) VALUES `+strings.Join(valueStrings, ","),
+			valueArgs...,
+		)
 		if err != nil {
 			return fmt.Errorf("insert order_items: %w", err)
+		}
+	}
+
+	// Decrement stok dalam transaksi yang sama — atomic, rollback kalau stok tidak cukup
+	for _, d := range decrements {
+		result, err := tx.Exec(ctx,
+			`UPDATE product_variants SET stock = stock - $1, updated_at = NOW()
+			 WHERE id = $2 AND stock >= $1`,
+			d.Quantity, d.VariantID,
+		)
+		if err != nil {
+			return fmt.Errorf("decrement stock variant %s: %w", d.VariantID, err)
+		}
+		if result.RowsAffected() == 0 {
+			return fmt.Errorf("insufficient stock for variant %s", d.VariantID)
 		}
 	}
 

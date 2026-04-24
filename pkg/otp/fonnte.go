@@ -36,7 +36,7 @@ func (f *fonnteClient) SendOTP(ctx context.Context, phone, code string) error {
 	phone = NormalizePhone(phone)
 
 	message := fmt.Sprintf(
-		"Kode OTP Anda adalah: *%s*\n\nBerlaku 5 menit. Jangan bagikan kode ini ke siapapun.",
+		"Welcome to Floweys Project \n\nKode OTP Anda adalah: *%s*\n\nBerlaku 5 menit. Jangan bagikan kode ini ke siapapun.",
 		code,
 	)
 
@@ -82,8 +82,9 @@ func (f *fonnteClient) SendOTP(ctx context.Context, phone, code string) error {
 
 // NormalizePhone konversi berbagai format nomor HP Indonesia ke format Fonnte (62xxx)
 // Contoh: "08123456789" → "628123456789"
-//         "+628123456789" → "628123456789"
-//         "8123456789" → "628123456789"
+//
+//	"+628123456789" → "628123456789"
+//	"8123456789" → "628123456789"
 func NormalizePhone(phone string) string {
 	// Hapus karakter non-digit kecuali leading +
 	phone = strings.TrimSpace(phone)

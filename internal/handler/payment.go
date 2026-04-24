@@ -44,7 +44,7 @@ func (h *PaymentHandler) InitiateForOrder(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	response.OK(w, map[string]any{
+	response.OK(w, "Pembayaran berhasil diinisiasi", map[string]any{
 		"snap_token":   result.SnapToken,
 		"redirect_url": result.RedirectURL,
 	})
@@ -60,22 +60,19 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Midtrans mengirim signature di header X-Callback-Token
-	// atau bisa juga dihitung dari payload
-	signature := r.Header.Get("X-Callback-Token")
-
-	if err := h.paymentUC.HandleWebhook(r.Context(), body, signature); err != nil {
+	if err := h.paymentUC.HandleWebhook(r.Context(), body); err != nil {
 		if errors.Is(err, paymentUC.ErrInvalidWebhook) {
 			response.JSON(w, http.StatusForbidden, response.Response{
-				Success: false,
-				Error:   "invalid webhook signature",
+				Code:    http.StatusForbidden,
+				Message: "invalid webhook signature",
+				Data:    nil,
 			})
 			return
 		}
 		// Webhook error tidak boleh return 5xx karena Midtrans akan retry
-		response.OK(w, map[string]any{"status": "ignored"})
+		response.OK(w, "ignored", nil)
 		return
 	}
 
-	response.OK(w, map[string]any{"status": "ok"})
+	response.OK(w, "ok", nil)
 }

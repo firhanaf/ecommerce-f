@@ -25,7 +25,7 @@ type InitiateResult struct {
 
 type UseCase interface {
 	InitiatePayment(ctx context.Context, orderID, userID uuid.UUID) (*InitiateResult, error)
-	HandleWebhook(ctx context.Context, payload []byte, signature string) error
+	HandleWebhook(ctx context.Context, payload []byte) error
 	GetByOrderID(ctx context.Context, orderID uuid.UUID) (*domain.Payment, error)
 }
 
@@ -118,14 +118,14 @@ func (uc *useCase) InitiatePayment(ctx context.Context, orderID, userID uuid.UUI
 }
 
 // HandleWebhook menerima notifikasi dari Midtrans dan update status order
-func (uc *useCase) HandleWebhook(ctx context.Context, payload []byte, signature string) error {
+func (uc *useCase) HandleWebhook(ctx context.Context, payload []byte) error {
 	webhookData, err := uc.gateway.ParseWebhook(payload)
 	if err != nil {
 		return fmt.Errorf("parse webhook: %w", err)
 	}
 
 	// Verifikasi signature — keamanan pertama
-	if !uc.gateway.VerifyWebhookSignature(webhookData.RawPayload, signature) {
+	if !uc.gateway.VerifyWebhookSignature(webhookData.RawPayload) {
 		return ErrInvalidWebhook
 	}
 

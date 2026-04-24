@@ -1,0 +1,29 @@
+# Environment
+.env
+*.env.local
+
+# Build output
+bin/
+*.exe
+*.exe~
+
+# Go
+*.test
+*.out
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary
+tmp/

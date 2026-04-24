@@ -15,6 +15,7 @@ type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 	FindByEmail(ctx context.Context, email string) (*domain.User, error)
+	FindByPhone(ctx context.Context, phone string) (*domain.User, error)
 	FindAll(ctx context.Context, page, limit int) ([]domain.User, int, error)
 	Update(ctx context.Context, user *domain.User) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, isActive bool) error
@@ -28,6 +29,7 @@ type OTPRepository interface {
 	Create(ctx context.Context, otp *domain.OTPToken) error
 	FindLatest(ctx context.Context, userID uuid.UUID, otpType string) (*domain.OTPToken, error)
 	MarkUsed(ctx context.Context, id uuid.UUID) error
+	IncrementAttempts(ctx context.Context, id uuid.UUID) error
 	CountRecent(ctx context.Context, userID uuid.UUID, otpType string, since time.Time) (int, error)
 }
 
@@ -40,6 +42,16 @@ type AddressRepository interface {
 	Update(ctx context.Context, addr *domain.Address) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	SetDefault(ctx context.Context, userID, addressID uuid.UUID) error
+}
+
+// ─── Category ────────────────────────────────────────────────────────────────
+
+type CategoryRepository interface {
+	Create(ctx context.Context, cat *domain.Category) error
+	FindByID(ctx context.Context, id uuid.UUID) (*domain.Category, error)
+	FindAll(ctx context.Context) ([]domain.Category, error)
+	Update(ctx context.Context, cat *domain.Category) error
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 // ─── Product ─────────────────────────────────────────────────────────────────
@@ -97,8 +109,15 @@ type OrderFilter struct {
 	Limit  int
 }
 
+// StockDecrement dipakai untuk decrement stok dalam satu transaksi bersama order
+type StockDecrement struct {
+	VariantID uuid.UUID
+	Quantity  int
+}
+
 type OrderRepository interface {
-	Create(ctx context.Context, order *domain.Order) error
+	// Create menyimpan order + order_items + decrement stok dalam satu transaksi DB
+	Create(ctx context.Context, order *domain.Order, decrements []StockDecrement) error
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Order, error)
 	FindAll(ctx context.Context, filter OrderFilter) ([]domain.Order, int, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.OrderStatus) error

@@ -70,6 +70,7 @@ func main() {
 	// ── 4. Init repositories (implementasi Postgres) ─────────────────────────
 	userRepo := postgres.NewUserRepository(db)
 	addressRepo := postgres.NewAddressRepository(db)
+	categoryRepo := postgres.NewCategoryRepository(db)
 	productRepo := postgres.NewProductRepository(db)
 	variantRepo := postgres.NewProductVariantRepository(db)
 	imageRepo := postgres.NewProductImageRepository(db)
@@ -89,12 +90,14 @@ func main() {
 
 	// ── 6. Init handlers ─────────────────────────────────────────────────────
 	handlers := router.Handlers{
-		Auth:    handler.NewAuthHandler(authUseCase),
-		Product: handler.NewProductHandler(productUseCase),
-		Cart:    handler.NewCartHandler(cartUseCase),
-		Order:   handler.NewOrderHandler(orderUseCase),
-		Payment: handler.NewPaymentHandler(paymentUseCase),
-		Admin:   handler.NewAdminHandler(userRepo, auditRepo, orderUseCase),
+		Auth:     handler.NewAuthHandler(authUseCase),
+		Product:  handler.NewProductHandler(productUseCase),
+		Category: handler.NewCategoryHandler(categoryRepo),
+		Address:  handler.NewAddressHandler(addressRepo),
+		Cart:     handler.NewCartHandler(cartUseCase),
+		Order:    handler.NewOrderHandler(orderUseCase),
+		Payment:  handler.NewPaymentHandler(paymentUseCase),
+		Admin:    handler.NewAdminHandler(userRepo, auditRepo, orderUseCase),
 	}
 
 	// ── 7. Init router ───────────────────────────────────────────────────────

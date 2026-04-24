@@ -58,7 +58,7 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalPages := (total + filter.Limit - 1) / filter.Limit
-	response.OKWithMeta(w, toProductListResponse(products), response.Meta{
+	response.OKWithMeta(w, "Berhasil mendapatkan daftar produk", toProductListResponse(products), response.Meta{
 		Page:       filter.Page,
 		Limit:      filter.Limit,
 		Total:      total,
@@ -80,7 +80,7 @@ func (h *ProductHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, toProductResponse(product))
+	response.OK(w, "Berhasil mendapatkan detail produk", toProductResponse(product))
 }
 
 // POST /api/v1/seller/products
@@ -105,7 +105,7 @@ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.Created(w, toProductResponse(product))
+	response.Created(w, "Produk berhasil dibuat", toProductResponse(product))
 }
 
 // PUT /api/v1/seller/products/{id}
@@ -132,7 +132,7 @@ func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, toProductResponse(product))
+	response.OK(w, "Produk berhasil diperbarui", toProductResponse(product))
 }
 
 // DELETE /api/v1/seller/products/{id}
@@ -152,7 +152,7 @@ func (h *ProductHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, map[string]any{"message": "product deleted"})
+	response.OK(w, "Produk berhasil dihapus", nil)
 }
 
 // POST /api/v1/seller/products/{id}/images
@@ -201,7 +201,7 @@ func (h *ProductHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.Created(w, toProductImageResponse(image))
+	response.Created(w, "Gambar produk berhasil diupload", toProductImageResponse(image))
 }
 
 // ─── Response Mappers ─────────────────────────────────────────────────────────

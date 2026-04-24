@@ -11,24 +11,24 @@ import (
 )
 
 type Handlers struct {
-	Auth    *handler.AuthHandler
-	Product *handler.ProductHandler
-	Cart    *handler.CartHandler
-	Order   *handler.OrderHandler
-	Payment *handler.PaymentHandler
-	Admin   *handler.AdminHandler
+	Auth     *handler.AuthHandler
+	Product  *handler.ProductHandler
+	Category *handler.CategoryHandler
+	Address  *handler.AddressHandler
+	Cart     *handler.CartHandler
+	Order    *handler.OrderHandler
+	Payment  *handler.PaymentHandler
+	Admin    *handler.AdminHandler
 }
 
 func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 	r := chi.NewRouter()
 
-	// Global middleware - urutan penting
 	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.RequestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(chimiddleware.CleanPath)
 
-	// Health check (tidak perlu auth)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
@@ -36,7 +36,7 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 
-		// ── Public routes (tidak perlu login) ───────────────────────────────
+		// ── Public routes ────────────────────────────────────────────────────
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/register", h.Auth.Register)
 			r.Post("/verify-otp", h.Auth.VerifyOTP)
@@ -45,15 +45,26 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 			r.Post("/refresh", h.Auth.Refresh)
 		})
 
-		// Katalog produk - boleh diakses tanpa login
+		// Katalog produk & kategori — public
 		r.Get("/products", h.Product.List)
 		r.Get("/products/{slug}", h.Product.GetBySlug)
+		r.Get("/categories", h.Category.List)
 
-		// ── Authenticated routes ─────────────────────────────────────────────
+		// Webhook Midtrans — public (Midtrans tidak kirim JWT)
+		r.Post("/payments/webhook", h.Payment.Webhook)
+
+		// ── Buyer routes (JWT required) ──────────────────────────────────────
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(tokenSvc))
 
-			// Cart
+			r.Route("/addresses", func(r chi.Router) {
+				r.Get("/", h.Address.List)
+				r.Post("/", h.Address.Create)
+				r.Put("/{id}", h.Address.Update)
+				r.Delete("/{id}", h.Address.Delete)
+				r.Put("/{id}/default", h.Address.SetDefault)
+			})
+
 			r.Route("/cart", func(r chi.Router) {
 				r.Get("/", h.Cart.Get)
 				r.Post("/items", h.Cart.AddItem)
@@ -61,47 +72,42 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 				r.Delete("/items/{itemID}", h.Cart.RemoveItem)
 			})
 
-			// Orders
 			r.Route("/orders", func(r chi.Router) {
 				r.Get("/", h.Order.List)
 				r.Post("/", h.Order.Create)
 				r.Get("/{id}", h.Order.GetByID)
 				r.Post("/{id}/pay", h.Payment.InitiateForOrder)
 			})
-
-			// Payments
-			r.Post("/payments/webhook", h.Payment.Webhook)
 		})
 
-		// ── Seller routes ────────────────────────────────────────────────────
+		// ── Admin routes (JWT + role admin required) ─────────────────────────
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(tokenSvc))
-			r.Use(middleware.RequireRole("seller", "admin"))
+			r.Use(middleware.RequireRole("admin"))
 
-			r.Route("/seller", func(r chi.Router) {
-				// Produk management
+			r.Route("/admin", func(r chi.Router) {
+				// User management
+				r.Get("/users", h.Admin.ListUsers)
+				r.Put("/users/{id}/status", h.Admin.UpdateUserStatus)
+
+				// Audit log
+				r.Get("/audit-logs", h.Admin.ListAuditLogs)
+
+				// Category management
+				r.Post("/categories", h.Category.Create)
+				r.Put("/categories/{id}", h.Category.Update)
+				r.Delete("/categories/{id}", h.Category.Delete)
+
+				// Product management
 				r.Post("/products", h.Product.Create)
 				r.Put("/products/{id}", h.Product.Update)
 				r.Delete("/products/{id}", h.Product.Delete)
 				r.Post("/products/{id}/images", h.Product.UploadImage)
 
 				// Order management
-				r.Get("/orders", h.Order.ListSeller)
+				r.Get("/orders", h.Admin.ListOrders)
 				r.Put("/orders/{id}/status", h.Order.UpdateStatus)
 				r.Post("/orders/{id}/shipment", h.Order.CreateShipment)
-			})
-		})
-
-		// ── Admin routes ─────────────────────────────────────────────────────
-		r.Group(func(r chi.Router) {
-			r.Use(middleware.Auth(tokenSvc))
-			r.Use(middleware.RequireRole("admin"))
-
-			r.Route("/admin", func(r chi.Router) {
-				r.Get("/users", h.Admin.ListUsers)
-				r.Put("/users/{id}/status", h.Admin.UpdateUserStatus)
-				r.Get("/audit-logs", h.Admin.ListAuditLogs)
-				r.Get("/orders", h.Admin.ListOrders)
 			})
 		})
 	})

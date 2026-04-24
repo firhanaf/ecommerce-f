@@ -35,7 +35,7 @@ func (h *CartHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, toCartResponse(cart))
+	response.OK(w, "Berhasil mendapatkan cart", toCartResponse(cart))
 }
 
 // POST /api/v1/cart/items
@@ -71,17 +71,14 @@ func (h *CartHandler) AddItem(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, cartUC.ErrVariantNotFound):
 			response.NotFound(w, "variant")
 		case errors.Is(err, cartUC.ErrVariantOutOfStock):
-			response.JSON(w, http.StatusUnprocessableEntity, response.Response{
-				Success: false,
-				Error:   err.Error(),
-			})
+			response.UnprocessableEntity(w, err.Error())
 		default:
 			response.InternalError(w)
 		}
 		return
 	}
 
-	response.OK(w, map[string]any{"message": "item added to cart"})
+	response.OK(w, "Item berhasil ditambahkan ke cart", nil)
 }
 
 // PUT /api/v1/cart/items/{itemID}
@@ -118,7 +115,7 @@ func (h *CartHandler) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, map[string]any{"message": "cart item updated"})
+	response.OK(w, "Item cart berhasil diperbarui", nil)
 }
 
 // DELETE /api/v1/cart/items/{itemID}
@@ -147,7 +144,7 @@ func (h *CartHandler) RemoveItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response.OK(w, map[string]any{"message": "item removed from cart"})
+	response.OK(w, "Item berhasil dihapus dari cart", nil)
 }
 
 // ─── Response Mapper ─────────────────────────────────────────────────────────
