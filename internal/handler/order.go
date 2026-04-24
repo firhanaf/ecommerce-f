@@ -129,8 +129,39 @@ func (h *OrderHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "Berhasil mendapatkan detail order", toOrderResponse(order))
 }
 
-// GET /api/v1/seller/orders — Daftar semua order (untuk seller/admin)
-func (h *OrderHandler) ListSeller(w http.ResponseWriter, r *http.Request) {
+// POST /api/v1/orders/{id}/cancel
+func (h *OrderHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w)
+		return
+	}
+
+	orderID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid order id")
+		return
+	}
+
+	if err := h.orderUC.Cancel(r.Context(), orderID, userID); err != nil {
+		switch {
+		case errors.Is(err, orderUC.ErrOrderNotFound):
+			response.NotFound(w, "order")
+		case errors.Is(err, orderUC.ErrUnauthorized):
+			response.Forbidden(w)
+		case errors.Is(err, orderUC.ErrCannotCancel):
+			response.UnprocessableEntity(w, err.Error())
+		default:
+			response.InternalError(w)
+		}
+		return
+	}
+
+	response.OK(w, "Order berhasil dibatalkan", nil)
+}
+
+// GET /api/v1/admin/orders — Daftar semua order (admin only)
+func (h *OrderHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	page, limit := parsePagination(r)
 
 	filter := repository.OrderFilter{
@@ -158,7 +189,7 @@ func (h *OrderHandler) ListSeller(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PUT /api/v1/seller/orders/{id}/status
+// PUT /api/v1/admin/orders/{id}/status
 func (h *OrderHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := middleware.GetUserIDFromContext(r.Context())
 	if !ok {
@@ -204,7 +235,7 @@ func (h *OrderHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "Status order berhasil diperbarui", nil)
 }
 
-// POST /api/v1/seller/orders/{id}/shipment
+// POST /api/v1/admin/orders/{id}/shipment
 func (h *OrderHandler) CreateShipment(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := middleware.GetUserIDFromContext(r.Context())
 	if !ok {

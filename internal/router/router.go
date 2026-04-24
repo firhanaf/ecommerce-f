@@ -43,6 +43,8 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 			r.Post("/resend-otp", h.Auth.ResendOTP)
 			r.Post("/login", h.Auth.Login)
 			r.Post("/refresh", h.Auth.Refresh)
+			r.Post("/forgot-password", h.Auth.ForgotPassword)
+			r.Post("/reset-password", h.Auth.ResetPassword)
 		})
 
 		// Katalog produk & kategori — public
@@ -77,6 +79,7 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 				r.Post("/", h.Order.Create)
 				r.Get("/{id}", h.Order.GetByID)
 				r.Post("/{id}/pay", h.Payment.InitiateForOrder)
+				r.Post("/{id}/cancel", h.Order.Cancel)
 			})
 		})
 
@@ -103,6 +106,12 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 				r.Put("/products/{id}", h.Product.Update)
 				r.Delete("/products/{id}", h.Product.Delete)
 				r.Post("/products/{id}/images", h.Product.UploadImage)
+
+				// Variant management
+				r.Post("/products/{id}/variants", h.Product.CreateVariant)
+				r.Put("/products/{id}/variants/{variantID}", h.Product.UpdateVariant)
+				r.Delete("/products/{id}/variants/{variantID}", h.Product.DeleteVariant)
+				r.Put("/products/{id}/variants/{variantID}/stock", h.Product.AdjustStock)
 
 				// Order management
 				r.Get("/orders", h.Admin.ListOrders)

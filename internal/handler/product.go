@@ -83,7 +83,7 @@ func (h *ProductHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "Berhasil mendapatkan detail produk", toProductResponse(product))
 }
 
-// POST /api/v1/seller/products
+// POST /api/v1/admin/products
 func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req productUC.CreateProductInput
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -108,7 +108,7 @@ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, "Produk berhasil dibuat", toProductResponse(product))
 }
 
-// PUT /api/v1/seller/products/{id}
+// PUT /api/v1/admin/products/{id}
 func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -135,7 +135,7 @@ func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "Produk berhasil diperbarui", toProductResponse(product))
 }
 
-// DELETE /api/v1/seller/products/{id}
+// DELETE /api/v1/admin/products/{id}
 func (h *ProductHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
@@ -155,7 +155,128 @@ func (h *ProductHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, "Produk berhasil dihapus", nil)
 }
 
-// POST /api/v1/seller/products/{id}/images
+// POST /api/v1/admin/products/{id}/variants
+func (h *ProductHandler) CreateVariant(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid product id")
+		return
+	}
+
+	var req productUC.CreateVariantInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+
+	variant, err := h.productUC.CreateVariant(r.Context(), productID, req)
+	if err != nil {
+		if errors.Is(err, productUC.ErrProductNotFound) {
+			response.NotFound(w, "product")
+			return
+		}
+		response.BadRequest(w, err.Error())
+		return
+	}
+
+	response.Created(w, "Variant berhasil ditambahkan", toVariantResponse(variant))
+}
+
+// PUT /api/v1/admin/products/{id}/variants/{variantID}
+func (h *ProductHandler) UpdateVariant(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid product id")
+		return
+	}
+
+	variantID, err := uuid.Parse(chi.URLParam(r, "variantID"))
+	if err != nil {
+		response.BadRequest(w, "invalid variant id")
+		return
+	}
+
+	var req productUC.UpdateVariantInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+
+	variant, err := h.productUC.UpdateVariant(r.Context(), productID, variantID, req)
+	if err != nil {
+		if errors.Is(err, productUC.ErrVariantNotFound) {
+			response.NotFound(w, "variant")
+			return
+		}
+		response.BadRequest(w, err.Error())
+		return
+	}
+
+	response.OK(w, "Variant berhasil diperbarui", toVariantResponse(variant))
+}
+
+// DELETE /api/v1/admin/products/{id}/variants/{variantID}
+func (h *ProductHandler) DeleteVariant(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid product id")
+		return
+	}
+
+	variantID, err := uuid.Parse(chi.URLParam(r, "variantID"))
+	if err != nil {
+		response.BadRequest(w, "invalid variant id")
+		return
+	}
+
+	if err := h.productUC.DeleteVariant(r.Context(), productID, variantID); err != nil {
+		if errors.Is(err, productUC.ErrVariantNotFound) {
+			response.NotFound(w, "variant")
+			return
+		}
+		response.InternalError(w)
+		return
+	}
+
+	response.OK(w, "Variant berhasil dihapus", nil)
+}
+
+// PUT /api/v1/admin/products/{id}/variants/{variantID}/stock
+func (h *ProductHandler) AdjustStock(w http.ResponseWriter, r *http.Request) {
+	productID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid product id")
+		return
+	}
+
+	variantID, err := uuid.Parse(chi.URLParam(r, "variantID"))
+	if err != nil {
+		response.BadRequest(w, "invalid variant id")
+		return
+	}
+
+	var req struct {
+		Stock int `json:"stock"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+
+	variant, err := h.productUC.AdjustStock(r.Context(), productID, variantID, req.Stock)
+	if err != nil {
+		if errors.Is(err, productUC.ErrVariantNotFound) {
+			response.NotFound(w, "variant")
+			return
+		}
+		response.BadRequest(w, err.Error())
+		return
+	}
+
+	response.OK(w, "Stok berhasil diperbarui", toVariantResponse(variant))
+}
+
+// POST /api/v1/admin/products/{id}/images
 // Multipart form: field "image" + optional field "is_primary" = "true"
 func (h *ProductHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	productID, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -245,6 +366,20 @@ func toProductListResponse(products []domain.Product) []map[string]any {
 		result = append(result, toProductResponse(p))
 	}
 	return result
+}
+
+func toVariantResponse(v domain.ProductVariant) map[string]any {
+	return map[string]any{
+		"id":         v.ID,
+		"product_id": v.ProductID,
+		"name":       v.Name,
+		"sku":        v.SKU,
+		"price":      v.Price,
+		"stock":      v.Stock,
+		"is_active":  v.IsActive,
+		"created_at": v.CreatedAt,
+		"updated_at": v.UpdatedAt,
+	}
 }
 
 func toProductImageResponse(img domain.ProductImage) map[string]any {

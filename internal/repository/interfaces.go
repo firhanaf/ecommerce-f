@@ -20,6 +20,7 @@ type UserRepository interface {
 	Update(ctx context.Context, user *domain.User) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, isActive bool) error
 	UpdatePhoneVerified(ctx context.Context, id uuid.UUID) error
+	UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error
 	SoftDelete(ctx context.Context, id uuid.UUID) error
 }
 
@@ -121,6 +122,8 @@ type OrderRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*domain.Order, error)
 	FindAll(ctx context.Context, filter OrderFilter) ([]domain.Order, int, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.OrderStatus) error
+	// Cancel update status ke cancelled + restore stok dalam satu transaksi DB
+	Cancel(ctx context.Context, id uuid.UUID) error
 }
 
 // ─── Payment ─────────────────────────────────────────────────────────────────

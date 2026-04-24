@@ -129,6 +129,12 @@ func (r *userRepository) UpdateStatus(ctx context.Context, id uuid.UUID, isActiv
 	return err
 }
 
+func (r *userRepository) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	query := `UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3`
+	_, err := r.db.Exec(ctx, query, passwordHash, time.Now(), id)
+	return err
+}
+
 func (r *userRepository) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	query := `UPDATE users SET is_active = false, updated_at = $1 WHERE id = $2`
 	_, err := r.db.Exec(ctx, query, time.Now(), id)

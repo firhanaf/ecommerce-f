@@ -125,8 +125,9 @@ type UseCase interface {
 
 	// Variant
 	CreateVariant(ctx context.Context, productID uuid.UUID, input CreateVariantInput) (domain.ProductVariant, error)
-	UpdateVariant(ctx context.Context, variantID uuid.UUID, input UpdateVariantInput) (domain.ProductVariant, error)
-	DeleteVariant(ctx context.Context, variantID uuid.UUID) error
+	UpdateVariant(ctx context.Context, productID, variantID uuid.UUID, input UpdateVariantInput) (domain.ProductVariant, error)
+	DeleteVariant(ctx context.Context, productID, variantID uuid.UUID) error
+	AdjustStock(ctx context.Context, productID, variantID uuid.UUID, stock int) (domain.ProductVariant, error)
 
 	// Image
 	UploadImage(ctx context.Context, input UploadImageInput) (domain.ProductImage, error)
@@ -376,13 +377,13 @@ func (uc *useCase) CreateVariant(ctx context.Context, productID uuid.UUID, input
 	return *variant, nil
 }
 
-func (uc *useCase) UpdateVariant(ctx context.Context, variantID uuid.UUID, input UpdateVariantInput) (domain.ProductVariant, error) {
+func (uc *useCase) UpdateVariant(ctx context.Context, productID, variantID uuid.UUID, input UpdateVariantInput) (domain.ProductVariant, error) {
 	if err := input.Validate(); err != nil {
 		return domain.ProductVariant{}, err
 	}
 
 	variant, err := uc.variantRepo.FindByID(ctx, variantID)
-	if err != nil || variant == nil {
+	if err != nil || variant == nil || variant.ProductID != productID {
 		return domain.ProductVariant{}, ErrVariantNotFound
 	}
 
@@ -400,12 +401,42 @@ func (uc *useCase) UpdateVariant(ctx context.Context, variantID uuid.UUID, input
 	return *variant, nil
 }
 
-func (uc *useCase) DeleteVariant(ctx context.Context, variantID uuid.UUID) error {
+func (uc *useCase) DeleteVariant(ctx context.Context, productID, variantID uuid.UUID) error {
 	variant, err := uc.variantRepo.FindByID(ctx, variantID)
-	if err != nil || variant == nil {
+	if err != nil || variant == nil || variant.ProductID != productID {
 		return ErrVariantNotFound
 	}
 	return uc.variantRepo.Delete(ctx, variantID)
+}
+
+func (uc *useCase) AdjustStock(ctx context.Context, productID, variantID uuid.UUID, stock int) (domain.ProductVariant, error) {
+	if stock < 0 {
+		return domain.ProductVariant{}, errors.New("stock cannot be negative")
+	}
+
+	variant, err := uc.variantRepo.FindByID(ctx, variantID)
+	if err != nil || variant == nil || variant.ProductID != productID {
+		return domain.ProductVariant{}, ErrVariantNotFound
+	}
+
+	variant.Stock = stock
+	variant.UpdatedAt = time.Now()
+
+	if err := uc.variantRepo.Update(ctx, variant); err != nil {
+		return domain.ProductVariant{}, fmt.Errorf("adjust stock: %w", err)
+	}
+
+	uc.auditRepo.Create(ctx, &domain.AuditLog{
+		ID:         uuid.New(),
+		Action:     domain.AuditUpdate,
+		EntityType: "product_variants",
+		EntityID:   &variantID,
+		OldData:    map[string]any{"stock": variant.Stock},
+		NewData:    map[string]any{"stock": stock},
+		CreatedAt:  time.Now(),
+	})
+
+	return *variant, nil
 }
 
 // ─── Image ────────────────────────────────────────────────────────────────────

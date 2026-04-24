@@ -227,3 +227,56 @@ func (r *orderRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status
 	_, err := r.db.Exec(ctx, query, status, time.Now(), id)
 	return err
 }
+
+// Cancel update status ke cancelled dan restore stok semua item dalam satu transaksi.
+func (r *orderRepository) Cancel(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("orderRepository.Cancel begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx,
+		`UPDATE orders SET status = $1, updated_at = $2 WHERE id = $3`,
+		domain.OrderStatusCancelled, time.Now(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("cancel order: %w", err)
+	}
+
+	// Restore stok untuk setiap item — hanya jika variant_id tidak null (variant masih ada)
+	rows, err := tx.Query(ctx,
+		`SELECT variant_id, quantity FROM order_items WHERE order_id = $1 AND variant_id IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("fetch order items: %w", err)
+	}
+	defer rows.Close()
+
+	type stockItem struct {
+		variantID uuid.UUID
+		quantity  int
+	}
+	var items []stockItem
+	for rows.Next() {
+		var s stockItem
+		if err := rows.Scan(&s.variantID, &s.quantity); err != nil {
+			return err
+		}
+		items = append(items, s)
+	}
+	rows.Close()
+
+	for _, s := range items {
+		_, err = tx.Exec(ctx,
+			`UPDATE product_variants SET stock = stock + $1, updated_at = NOW() WHERE id = $2`,
+			s.quantity, s.variantID,
+		)
+		if err != nil {
+			return fmt.Errorf("restore stock variant %s: %w", s.variantID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}

@@ -19,6 +19,7 @@ var (
 	ErrAddressNotFound   = errors.New("address not found")
 	ErrOrderNotFound     = errors.New("order not found")
 	ErrUnauthorized      = errors.New("unauthorized to access this order")
+	ErrCannotCancel      = errors.New("order can only be cancelled when status is pending_payment")
 )
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
@@ -48,6 +49,7 @@ type UseCase interface {
 	ListAll(ctx context.Context, filter repository.OrderFilter) ([]domain.Order, int, error)
 	UpdateStatus(ctx context.Context, orderID uuid.UUID, status domain.OrderStatus, actorID uuid.UUID, actorRole string) error
 	CreateShipment(ctx context.Context, input CreateShipmentInput, actorID uuid.UUID) (*domain.Shipment, error)
+	Cancel(ctx context.Context, orderID, userID uuid.UUID) error
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
@@ -261,6 +263,39 @@ func (uc *useCase) CreateShipment(ctx context.Context, input CreateShipmentInput
 	})
 
 	return shipment, nil
+}
+
+// Cancel membatalkan order milik buyer — hanya boleh saat status pending_payment.
+// Stok dikembalikan secara atomic bersama perubahan status.
+func (uc *useCase) Cancel(ctx context.Context, orderID, userID uuid.UUID) error {
+	order, err := uc.orderRepo.FindByID(ctx, orderID)
+	if err != nil || order == nil {
+		return ErrOrderNotFound
+	}
+	if order.UserID != userID {
+		return ErrUnauthorized
+	}
+	if order.Status != domain.OrderStatusPendingPayment {
+		return ErrCannotCancel
+	}
+
+	if err := uc.orderRepo.Cancel(ctx, orderID); err != nil {
+		return fmt.Errorf("cancel order: %w", err)
+	}
+
+	uc.auditRepo.Create(ctx, &domain.AuditLog{
+		ID:         uuid.New(),
+		ActorID:    &userID,
+		ActorRole:  "buyer",
+		Action:     domain.AuditUpdate,
+		EntityType: "orders",
+		EntityID:   &orderID,
+		OldData:    map[string]any{"status": order.Status},
+		NewData:    map[string]any{"status": domain.OrderStatusCancelled},
+		CreatedAt:  time.Now(),
+	})
+
+	return nil
 }
 
 func (uc *useCase) UpdateStatus(ctx context.Context, orderID uuid.UUID, status domain.OrderStatus, actorID uuid.UUID, actorRole string) error {

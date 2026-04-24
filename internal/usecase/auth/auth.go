@@ -48,15 +48,17 @@ type RegisterResult struct {
 const maxOTPAttempts = 5
 
 var (
-	ErrEmailAlreadyExists = errors.New("email already registered")
-	ErrPhoneAlreadyExists = errors.New("phone number already registered")
-	ErrInvalidCredentials = errors.New("invalid email/phone or password")
-	ErrUserInactive       = errors.New("user account is inactive")
-	ErrPhoneNotVerified   = errors.New("phone number not verified")
-	ErrInvalidOTP         = errors.New("invalid or expired OTP code")
-	ErrOTPMaxAttempts     = errors.New("OTP has been invalidated due to too many failed attempts")
-	ErrOTPRateLimited     = errors.New("too many OTP requests, please wait before retrying")
-	ErrPhoneRequired      = errors.New("phone number is required for verification")
+	ErrEmailAlreadyExists    = errors.New("email already registered")
+	ErrPhoneAlreadyExists    = errors.New("phone number already registered")
+	ErrInvalidCredentials    = errors.New("invalid email/phone or password")
+	ErrUserInactive          = errors.New("user account is inactive")
+	ErrPhoneNotVerified      = errors.New("phone number not verified")
+	ErrInvalidOTP            = errors.New("invalid or expired OTP code")
+	ErrOTPMaxAttempts        = errors.New("OTP has been invalidated due to too many failed attempts")
+	ErrOTPRateLimited        = errors.New("too many OTP requests, please wait before retrying")
+	ErrPhoneRequired         = errors.New("phone number is required for verification")
+	ErrUserNotFound          = errors.New("user not found")
+	ErrPasswordTooShort      = errors.New("password must be at least 8 characters")
 )
 
 // ─── Interface ───────────────────────────────────────────────────────────────
@@ -67,6 +69,8 @@ type UseCase interface {
 	RefreshToken(ctx context.Context, refreshToken string) (*AuthResult, error)
 	VerifyOTP(ctx context.Context, userID uuid.UUID, code string) (*AuthResult, error)
 	ResendOTP(ctx context.Context, userID uuid.UUID) error
+	ForgotPassword(ctx context.Context, identifier string) (userID uuid.UUID, err error)
+	ResetPassword(ctx context.Context, userID uuid.UUID, code, newPassword string) error
 }
 
 // ─── Implementation ──────────────────────────────────────────────────────────
@@ -300,6 +304,90 @@ func (uc *useCase) ResendOTP(ctx context.Context, userID uuid.UUID) error {
 	}
 
 	return uc.sendOTP(ctx, user.ID, user.Phone, domain.OTPTypePhoneVerification)
+}
+
+// ForgotPassword mencari user berdasarkan email/phone, lalu kirim OTP reset password.
+// Rate limit: maks 1 OTP reset_password per 10 menit per user.
+func (uc *useCase) ForgotPassword(ctx context.Context, identifier string) (uuid.UUID, error) {
+	var user *domain.User
+	var err error
+
+	if strings.Contains(identifier, "@") {
+		user, err = uc.userRepo.FindByEmail(ctx, identifier)
+	} else {
+		user, err = uc.userRepo.FindByPhone(ctx, pkgotp.NormalizePhone(identifier))
+	}
+	if err != nil || user == nil {
+		return uuid.Nil, ErrUserNotFound
+	}
+	if !user.IsActive {
+		return uuid.Nil, ErrUserInactive
+	}
+
+	since := time.Now().Add(-10 * time.Minute)
+	count, err := uc.otpRepo.CountRecent(ctx, user.ID, domain.OTPTypeResetPassword, since)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if count >= 1 {
+		return uuid.Nil, ErrOTPRateLimited
+	}
+
+	if err := uc.sendOTP(ctx, user.ID, user.Phone, domain.OTPTypeResetPassword); err != nil {
+		return uuid.Nil, err
+	}
+
+	return user.ID, nil
+}
+
+// ResetPassword memvalidasi OTP reset password lalu update password hash.
+func (uc *useCase) ResetPassword(ctx context.Context, userID uuid.UUID, code, newPassword string) error {
+	if len(newPassword) < 8 {
+		return ErrPasswordTooShort
+	}
+
+	otp, err := uc.otpRepo.FindLatest(ctx, userID, domain.OTPTypeResetPassword)
+	if err != nil {
+		return err
+	}
+	if otp == nil || time.Now().After(otp.ExpiresAt) {
+		return ErrInvalidOTP
+	}
+	if otp.Attempts >= maxOTPAttempts {
+		return ErrOTPMaxAttempts
+	}
+	if otp.Code != code {
+		_ = uc.otpRepo.IncrementAttempts(ctx, otp.ID)
+		if otp.Attempts+1 >= maxOTPAttempts {
+			_ = uc.otpRepo.MarkUsed(ctx, otp.ID)
+			return ErrOTPMaxAttempts
+		}
+		return ErrInvalidOTP
+	}
+
+	if err := uc.otpRepo.MarkUsed(ctx, otp.ID); err != nil {
+		return err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if err := uc.userRepo.UpdatePassword(ctx, userID, string(hash)); err != nil {
+		return err
+	}
+
+	uc.auditRepo.Create(ctx, &domain.AuditLog{
+		ID:         uuid.New(),
+		ActorID:    &userID,
+		Action:     domain.AuditUpdate,
+		EntityType: "users",
+		EntityID:   &userID,
+		NewData:    map[string]any{"password_reset": true},
+		CreatedAt:  time.Now(),
+	})
+
+	return nil
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

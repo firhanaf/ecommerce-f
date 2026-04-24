@@ -47,7 +47,7 @@ func Auth(tokenSvc jwt.TokenService) func(http.Handler) http.Handler {
 // ─── Role Guard ───────────────────────────────────────────────────────────────
 
 // RequireRole memastikan hanya role tertentu yang boleh akses endpoint
-// Contoh: RequireRole("admin", "seller")
+// Contoh: RequireRole("admin")
 func RequireRole(roles ...string) func(http.Handler) http.Handler {
 	allowedRoles := make(map[string]bool, len(roles))
 	for _, r := range roles {

@@ -199,6 +199,87 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /api/v1/auth/forgot-password
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Identifier string `json:"identifier"` // email atau nomor HP
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+	if req.Identifier == "" {
+		response.BadRequest(w, "identifier (email or phone) is required")
+		return
+	}
+
+	userID, err := h.authUC.ForgotPassword(r.Context(), req.Identifier)
+	if err != nil {
+		switch {
+		case errors.Is(err, authUC.ErrUserNotFound):
+			// Sengaja generic — jangan bocorkan apakah email/phone terdaftar
+			response.OK(w, "Jika akun ditemukan, OTP akan dikirim ke WhatsApp terdaftar", nil)
+		case errors.Is(err, authUC.ErrOTPRateLimited):
+			response.TooManyRequests(w, "Permintaan reset password hanya bisa dilakukan 1x per 10 menit")
+		case errors.Is(err, authUC.ErrUserInactive):
+			response.JSON(w, http.StatusForbidden, response.Response{
+				Code:    http.StatusForbidden,
+				Message: "Akun tidak aktif",
+			})
+		default:
+			response.InternalError(w)
+		}
+		return
+	}
+
+	response.OK(w, "OTP reset password telah dikirim ke WhatsApp Anda", map[string]any{
+		"user_id": userID,
+	})
+}
+
+// POST /api/v1/auth/reset-password
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID      string `json:"user_id"`
+		Code        string `json:"code"`
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		response.BadRequest(w, "invalid user_id")
+		return
+	}
+	if len(req.Code) != 6 {
+		response.BadRequest(w, "OTP code must be 6 digits")
+		return
+	}
+	if req.NewPassword == "" {
+		response.BadRequest(w, "new_password is required")
+		return
+	}
+
+	if err := h.authUC.ResetPassword(r.Context(), userID, req.Code, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, authUC.ErrInvalidOTP):
+			response.UnprocessableEntity(w, err.Error())
+		case errors.Is(err, authUC.ErrOTPMaxAttempts):
+			response.TooManyRequests(w, err.Error())
+		case errors.Is(err, authUC.ErrPasswordTooShort):
+			response.BadRequest(w, err.Error())
+		default:
+			response.InternalError(w)
+		}
+		return
+	}
+
+	response.OK(w, "Password berhasil direset, silakan login dengan password baru", nil)
+}
+
 // POST /api/v1/auth/refresh
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
