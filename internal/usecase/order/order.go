@@ -4,22 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ecommerce-api/internal"
 	"ecommerce-api/internal/repository"
+	"ecommerce-api/pkg/notification"
 	"github.com/google/uuid"
 )
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
 var (
-	ErrCartEmpty         = errors.New("cart is empty")
-	ErrInsufficientStock = errors.New("one or more items have insufficient stock")
-	ErrAddressNotFound   = errors.New("address not found")
-	ErrOrderNotFound     = errors.New("order not found")
-	ErrUnauthorized      = errors.New("unauthorized to access this order")
-	ErrCannotCancel      = errors.New("order can only be cancelled when status is pending_payment")
+	ErrCartEmpty              = errors.New("cart is empty")
+	ErrInsufficientStock      = errors.New("one or more items have insufficient stock")
+	ErrAddressNotFound        = errors.New("address not found")
+	ErrOrderNotFound          = errors.New("order not found")
+	ErrUnauthorized           = errors.New("unauthorized to access this order")
+	ErrCannotCancel           = errors.New("order can only be cancelled when status is pending_payment")
+	ErrShipmentNotFound       = errors.New("shipment not found")
+	ErrInvalidShipmentStatus  = errors.New("invalid shipment status")
 )
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
@@ -49,6 +53,8 @@ type UseCase interface {
 	ListAll(ctx context.Context, filter repository.OrderFilter) ([]domain.Order, int, error)
 	UpdateStatus(ctx context.Context, orderID uuid.UUID, status domain.OrderStatus, actorID uuid.UUID, actorRole string) error
 	CreateShipment(ctx context.Context, input CreateShipmentInput, actorID uuid.UUID) (*domain.Shipment, error)
+	GetShipment(ctx context.Context, orderID, userID uuid.UUID) (*domain.Shipment, error)
+	UpdateShipmentStatus(ctx context.Context, orderID uuid.UUID, status domain.ShipmentStatus, actorID uuid.UUID) (*domain.Shipment, error)
 	Cancel(ctx context.Context, orderID, userID uuid.UUID) error
 }
 
@@ -62,6 +68,9 @@ type useCase struct {
 	paymentRepo  repository.PaymentRepository
 	shipmentRepo repository.ShipmentRepository
 	auditRepo    repository.AuditLogRepository
+	userRepo     repository.UserRepository
+	notifier     notification.Sender
+	adminPhone   string
 }
 
 func NewUseCase(
@@ -72,6 +81,9 @@ func NewUseCase(
 	paymentRepo repository.PaymentRepository,
 	shipmentRepo repository.ShipmentRepository,
 	auditRepo repository.AuditLogRepository,
+	userRepo repository.UserRepository,
+	notifier notification.Sender,
+	adminPhone string,
 ) UseCase {
 	return &useCase{
 		orderRepo:    orderRepo,
@@ -81,6 +93,9 @@ func NewUseCase(
 		paymentRepo:  paymentRepo,
 		shipmentRepo: shipmentRepo,
 		auditRepo:    auditRepo,
+		userRepo:     userRepo,
+		notifier:     notifier,
+		adminPhone:   adminPhone,
 	}
 }
 
@@ -181,7 +196,13 @@ func (uc *useCase) Checkout(ctx context.Context, input CreateOrderInput) (*domai
 	// 8. Bersihkan cart
 	uc.cartRepo.ClearCart(ctx, cart.ID)
 
-	// 9. Audit log
+	// 9. Notifikasi WA
+	if buyer, err := uc.userRepo.FindByID(ctx, input.UserID); err == nil && buyer != nil {
+		uc.notify(buyer.Phone, notification.MsgOrderCreated(order.ID.String(), order.Total))
+		uc.notify(uc.adminPhone, notification.MsgNewOrderAdmin(buyer.Name, order.ID.String(), order.Total))
+	}
+
+	// 10. Audit log
 	uc.auditRepo.Create(ctx, &domain.AuditLog{
 		ID:         uuid.New(),
 		ActorID:    &input.UserID,
@@ -251,6 +272,11 @@ func (uc *useCase) CreateShipment(ctx context.Context, input CreateShipmentInput
 	// Update order status ke shipped
 	uc.orderRepo.UpdateStatus(ctx, input.OrderID, domain.OrderStatusShipped)
 
+	// Notifikasi buyer
+	if buyer, err := uc.userRepo.FindByID(ctx, order.UserID); err == nil && buyer != nil {
+		uc.notify(buyer.Phone, notification.MsgOrderShipped(input.OrderID.String(), input.Courier, input.TrackingNumber))
+	}
+
 	uc.auditRepo.Create(ctx, &domain.AuditLog{
 		ID:         uuid.New(),
 		ActorID:    &actorID,
@@ -296,6 +322,92 @@ func (uc *useCase) Cancel(ctx context.Context, orderID, userID uuid.UUID) error 
 	})
 
 	return nil
+}
+
+func (uc *useCase) GetShipment(ctx context.Context, orderID, userID uuid.UUID) (*domain.Shipment, error) {
+	order, err := uc.orderRepo.FindByID(ctx, orderID)
+	if err != nil || order == nil {
+		return nil, ErrOrderNotFound
+	}
+	if order.UserID != userID {
+		return nil, ErrUnauthorized
+	}
+	shipment, err := uc.shipmentRepo.FindByOrderID(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("get shipment: %w", err)
+	}
+	if shipment == nil {
+		return nil, ErrShipmentNotFound
+	}
+	return shipment, nil
+}
+
+var validShipmentTransitions = map[domain.ShipmentStatus]bool{
+	domain.ShipmentStatusInTransit: true,
+	domain.ShipmentStatusDelivered: true,
+	domain.ShipmentStatusReturned:  true,
+}
+
+func (uc *useCase) UpdateShipmentStatus(ctx context.Context, orderID uuid.UUID, status domain.ShipmentStatus, actorID uuid.UUID) (*domain.Shipment, error) {
+	if !validShipmentTransitions[status] {
+		return nil, ErrInvalidShipmentStatus
+	}
+
+	shipment, err := uc.shipmentRepo.FindByOrderID(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("find shipment: %w", err)
+	}
+	if shipment == nil {
+		return nil, ErrShipmentNotFound
+	}
+
+	now := time.Now()
+	shipment.Status = status
+	if status == domain.ShipmentStatusDelivered {
+		shipment.DeliveredAt = &now
+	}
+
+	if err := uc.shipmentRepo.Update(ctx, shipment); err != nil {
+		return nil, fmt.Errorf("update shipment: %w", err)
+	}
+
+	// Sinkronisasi status order saat barang diterima
+	if status == domain.ShipmentStatusDelivered {
+		uc.orderRepo.UpdateStatus(ctx, orderID, domain.OrderStatusDelivered)
+
+		// Notifikasi buyer
+		if order, err := uc.orderRepo.FindByID(ctx, orderID); err == nil && order != nil {
+			if buyer, err := uc.userRepo.FindByID(ctx, order.UserID); err == nil && buyer != nil {
+				uc.notify(buyer.Phone, notification.MsgOrderDelivered(orderID.String()))
+			}
+		}
+	}
+
+	uc.auditRepo.Create(ctx, &domain.AuditLog{
+		ID:         uuid.New(),
+		ActorID:    &actorID,
+		ActorRole:  "admin",
+		Action:     domain.AuditUpdate,
+		EntityType: "shipments",
+		EntityID:   &shipment.ID,
+		OldData:    map[string]any{"status": shipment.Status},
+		NewData:    map[string]any{"status": status},
+		CreatedAt:  now,
+	})
+
+	return shipment, nil
+}
+
+// notify kirim WA secara async — tidak pernah block atau gagalkan operasi utama
+func (uc *useCase) notify(phone, message string) {
+	if uc.notifier == nil || phone == "" {
+		return
+	}
+	go func() {
+		if err := uc.notifier.Send(context.Background(), phone, message); err != nil {
+			slog.Warn("notification failed", "phone", phone, "error", err)
+		}
+	}()
 }
 
 func (uc *useCase) UpdateStatus(ctx context.Context, orderID uuid.UUID, status domain.OrderStatus, actorID uuid.UUID, actorRole string) error {

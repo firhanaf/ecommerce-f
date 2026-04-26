@@ -24,3 +24,16 @@ migrate:
 # stop & hapus container postgres
 db-stop:
 	docker stop ecommerce-db && docker rm ecommerce-db
+
+# jalankan MinIO (S3-compatible local storage)
+# Web UI: http://localhost:9001  |  user: minioadmin  |  pass: minioadmin
+minio:
+	docker run --name ecommerce-minio \
+		-e MINIO_ROOT_USER=minioadmin \
+		-e MINIO_ROOT_PASSWORD=minioadmin \
+		-p 9000:9000 -p 9001:9001 \
+		-v ecommerce-minio-data:/data \
+		-d minio/minio server /data --console-address ":9001"
+
+minio-stop:
+	docker stop ecommerce-minio && docker rm ecommerce-minio

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ecommerce-api/internal"
 	"ecommerce-api/internal/repository"
+	"ecommerce-api/pkg/notification"
 	"ecommerce-api/pkg/payment"
 	"github.com/google/uuid"
 )
@@ -26,28 +28,48 @@ type InitiateResult struct {
 type UseCase interface {
 	InitiatePayment(ctx context.Context, orderID, userID uuid.UUID) (*InitiateResult, error)
 	HandleWebhook(ctx context.Context, payload []byte) error
-	GetByOrderID(ctx context.Context, orderID uuid.UUID) (*domain.Payment, error)
+	GetByOrderID(ctx context.Context, orderID, userID uuid.UUID) (*domain.Payment, error)
 }
 
 type useCase struct {
 	paymentRepo repository.PaymentRepository
 	orderRepo   repository.OrderRepository
+	userRepo    repository.UserRepository
 	gateway     payment.PaymentGateway
 	auditRepo   repository.AuditLogRepository
+	notifier    notification.Sender
+	adminPhone  string
 }
 
 func NewUseCase(
 	paymentRepo repository.PaymentRepository,
 	orderRepo repository.OrderRepository,
+	userRepo repository.UserRepository,
 	gateway payment.PaymentGateway,
 	auditRepo repository.AuditLogRepository,
+	notifier notification.Sender,
+	adminPhone string,
 ) UseCase {
 	return &useCase{
 		paymentRepo: paymentRepo,
 		orderRepo:   orderRepo,
+		userRepo:    userRepo,
 		gateway:     gateway,
 		auditRepo:   auditRepo,
+		notifier:    notifier,
+		adminPhone:  adminPhone,
 	}
+}
+
+func (uc *useCase) notify(phone, message string) {
+	if uc.notifier == nil || phone == "" {
+		return
+	}
+	go func() {
+		if err := uc.notifier.Send(context.Background(), phone, message); err != nil {
+			slog.Warn("notification failed", "phone", phone, "error", err)
+		}
+	}()
 }
 
 // InitiatePayment membuat charge ke Midtrans Snap dan mengembalikan snap token
@@ -149,6 +171,16 @@ func (uc *useCase) HandleWebhook(ctx context.Context, payload []byte) error {
 		uc.orderRepo.UpdateStatus(ctx, pmnt.OrderID, newOrderStatus)
 	}
 
+	// Notifikasi WA saat pembayaran berhasil
+	if newPaymentStatus == domain.PaymentStatusSettlement {
+		if order, err := uc.orderRepo.FindByID(ctx, pmnt.OrderID); err == nil && order != nil {
+			if buyer, err := uc.userRepo.FindByID(ctx, order.UserID); err == nil && buyer != nil {
+				uc.notify(buyer.Phone, notification.MsgPaymentConfirmed(pmnt.OrderID.String(), int64(pmnt.Amount)))
+			}
+			uc.notify(uc.adminPhone, notification.MsgPaymentReceivedAdmin(pmnt.OrderID.String(), int64(pmnt.Amount)))
+		}
+	}
+
 	// Audit log
 	uc.auditRepo.Create(ctx, &domain.AuditLog{
 		ID:         uuid.New(),
@@ -164,7 +196,14 @@ func (uc *useCase) HandleWebhook(ctx context.Context, payload []byte) error {
 	return nil
 }
 
-func (uc *useCase) GetByOrderID(ctx context.Context, orderID uuid.UUID) (*domain.Payment, error) {
+func (uc *useCase) GetByOrderID(ctx context.Context, orderID, userID uuid.UUID) (*domain.Payment, error) {
+	order, err := uc.orderRepo.FindByID(ctx, orderID)
+	if err != nil || order == nil {
+		return nil, ErrOrderNotFound
+	}
+	if order.UserID != userID {
+		return nil, fmt.Errorf("unauthorized")
+	}
 	return uc.paymentRepo.FindByOrderID(ctx, orderID)
 }
 

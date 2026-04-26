@@ -141,12 +141,13 @@ func (r *userRepository) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-// scanUser reusable scanner — satu tempat kalau kolom berubah
+// scanUser reusable scanner — phone & avatar_url nullable di DB, di-handle dengan *string
 func scanUser(row pgx.Row) (*domain.User, error) {
 	var u domain.User
+	var phone, avatarURL *string
 	err := row.Scan(
 		&u.ID, &u.Name, &u.Email, &u.PasswordHash,
-		&u.Role, &u.Phone, &u.AvatarURL, &u.IsActive,
+		&u.Role, &phone, &avatarURL, &u.IsActive,
 		&u.PhoneVerified, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
@@ -154,6 +155,12 @@ func scanUser(row pgx.Row) (*domain.User, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("scanUser: %w", err)
+	}
+	if phone != nil {
+		u.Phone = *phone
+	}
+	if avatarURL != nil {
+		u.AvatarURL = *avatarURL
 	}
 	return &u, nil
 }

@@ -8,6 +8,7 @@ import (
 	"ecommerce-api/pkg/jwt"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 )
 
 type Handlers struct {
@@ -21,9 +22,20 @@ type Handlers struct {
 	Admin    *handler.AdminHandler
 }
 
+// UploadsDir adalah direktori lokal untuk file upload (dipakai saat STORAGE=local).
+// Kosong berarti local storage tidak dipakai.
+var UploadsDir string
+
 func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 	r := chi.NewRouter()
 
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
 	r.Use(chimiddleware.RealIP)
 	r.Use(middleware.RequestLogger)
 	r.Use(middleware.Recoverer)
@@ -33,6 +45,12 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// Serve file upload lokal (hanya aktif jika UploadsDir diset)
+	if UploadsDir != "" {
+		fs := http.FileServer(http.Dir(UploadsDir))
+		r.Handle("/uploads/*", http.StripPrefix("/uploads/", fs))
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 
@@ -80,6 +98,8 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 				r.Get("/{id}", h.Order.GetByID)
 				r.Post("/{id}/pay", h.Payment.InitiateForOrder)
 				r.Post("/{id}/cancel", h.Order.Cancel)
+				r.Get("/{id}/shipment", h.Order.GetShipment)
+				r.Get("/{id}/payment", h.Payment.GetByOrder)
 			})
 		})
 
@@ -106,6 +126,7 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 				r.Put("/products/{id}", h.Product.Update)
 				r.Delete("/products/{id}", h.Product.Delete)
 				r.Post("/products/{id}/images", h.Product.UploadImage)
+				r.Delete("/products/{id}/images/{imageID}", h.Product.DeleteImage)
 
 				// Variant management
 				r.Post("/products/{id}/variants", h.Product.CreateVariant)
@@ -117,6 +138,7 @@ func New(h Handlers, tokenSvc jwt.TokenService) http.Handler {
 				r.Get("/orders", h.Admin.ListOrders)
 				r.Put("/orders/{id}/status", h.Order.UpdateStatus)
 				r.Post("/orders/{id}/shipment", h.Order.CreateShipment)
+				r.Put("/orders/{id}/shipment", h.Order.UpdateShipmentStatus)
 			})
 		})
 	})

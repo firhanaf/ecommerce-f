@@ -21,6 +21,7 @@ import (
 	productUC "ecommerce-api/internal/usecase/product"
 	"ecommerce-api/pkg/database"
 	"ecommerce-api/pkg/jwt"
+	"ecommerce-api/pkg/notification"
 	pkgotp "ecommerce-api/pkg/otp"
 	"ecommerce-api/pkg/payment"
 	"ecommerce-api/pkg/storage"
@@ -45,11 +46,33 @@ func main() {
 	defer db.Close()
 	log.Println("database connected")
 
-	// Storage (AWS S3)
-	// Mau ganti ke GCS? Ganti NewS3Storage dengan NewGCSStorage — usecase tidak berubah
-	storageClient, err := storage.NewS3Storage(ctx, cfg.AWS.S3Bucket, cfg.AWS.Region)
-	if err != nil {
-		log.Fatalf("failed to init storage: %v", err)
+	// Storage — pilih backend berdasarkan STORAGE_TYPE di .env
+	//   local → simpan ke ./uploads/, serve via /uploads/*
+	//   s3    → AWS S3 atau MinIO (jika AWS_S3_ENDPOINT diset)
+	storageType := cfg.Storage.Type
+	var storageClient storage.Storage
+	switch storageType {
+	case "local":
+		uploadsDir := cfg.Storage.LocalDir
+		if uploadsDir == "" {
+			uploadsDir = "./uploads"
+		}
+		storageClient, err = storage.NewLocalStorage(uploadsDir, cfg.Storage.LocalBaseURL)
+		if err != nil {
+			log.Fatalf("failed to init local storage: %v", err)
+		}
+		router.UploadsDir = uploadsDir
+		log.Printf("storage: local filesystem at %s", uploadsDir)
+	default:
+		storageClient, err = storage.NewS3StorageWithEndpoint(ctx, cfg.AWS.S3Bucket, cfg.AWS.Region, cfg.AWS.S3Endpoint)
+		if err != nil {
+			log.Fatalf("failed to init storage: %v", err)
+		}
+		if cfg.AWS.S3Endpoint != "" {
+			log.Printf("storage: MinIO at %s (bucket: %s)", cfg.AWS.S3Endpoint, cfg.AWS.S3Bucket)
+		} else {
+			log.Printf("storage: AWS S3 (bucket: %s)", cfg.AWS.S3Bucket)
+		}
 	}
 
 	// Token service
@@ -66,6 +89,7 @@ func main() {
 
 	// ── 3. Init external services ────────────────────────────────────────────
 	otpSender := pkgotp.NewFonnteClient(cfg.Fonnte.Token)
+	notifier := notification.NewFonnteNotifier(cfg.Fonnte.Token)
 
 	// ── 4. Init repositories (implementasi Postgres) ─────────────────────────
 	userRepo := postgres.NewUserRepository(db)
@@ -85,8 +109,8 @@ func main() {
 	authUseCase := authUC.NewUseCase(userRepo, otpRepo, tokenSvc, otpSender, auditRepo)
 	productUseCase := productUC.NewUseCase(productRepo, variantRepo, imageRepo, storageClient, auditRepo)
 	cartUseCase := cartUC.NewUseCase(cartRepo, variantRepo)
-	orderUseCase := orderUC.NewUseCase(orderRepo, cartRepo, variantRepo, addressRepo, paymentRepo, shipmentRepo, auditRepo)
-	paymentUseCase := paymentUC.NewUseCase(paymentRepo, orderRepo, paymentGW, auditRepo)
+	orderUseCase := orderUC.NewUseCase(orderRepo, cartRepo, variantRepo, addressRepo, paymentRepo, shipmentRepo, auditRepo, userRepo, notifier, cfg.Fonnte.AdminPhone)
+	paymentUseCase := paymentUC.NewUseCase(paymentRepo, orderRepo, userRepo, paymentGW, auditRepo, notifier, cfg.Fonnte.AdminPhone)
 
 	// ── 6. Init handlers ─────────────────────────────────────────────────────
 	handlers := router.Handlers{

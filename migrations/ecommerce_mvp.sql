@@ -250,16 +250,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_entity      ON audit_logs(entity_type,
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at  ON audit_logs(created_at DESC);
 
 -- ─── Seed: default admin user ────────────────────────────────────────────────
--- Password: Admin@12345 (bcrypt hash)
--- GANTI hash ini sebelum deploy ke production!
+-- Password: Admin@12345
+-- GANTI password ini sebelum deploy ke production!
 
 INSERT INTO users (id, name, email, password_hash, role, is_active, phone_verified)
 VALUES (
     uuid_generate_v4(),
     'Admin',
     'admin@ecommerce.local',
-    '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', -- password: "password"
+    '$2a$10$1X6zVwGFj4JBGbMRQYcPf.E4bkOF6hRLiwlGy6sQdu8LuDMh00y1G',
     'admin',
     true,
-    true  -- admin tidak perlu verifikasi WA
+    true
 ) ON CONFLICT (email) DO NOTHING;

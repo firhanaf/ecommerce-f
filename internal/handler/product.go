@@ -325,6 +325,26 @@ func (h *ProductHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, "Gambar produk berhasil diupload", toProductImageResponse(image))
 }
 
+// DELETE /api/v1/admin/products/{id}/images/{imageID}
+func (h *ProductHandler) DeleteImage(w http.ResponseWriter, r *http.Request) {
+	imageID, err := uuid.Parse(chi.URLParam(r, "imageID"))
+	if err != nil {
+		response.BadRequest(w, "invalid image id")
+		return
+	}
+
+	if err := h.productUC.DeleteImage(r.Context(), imageID); err != nil {
+		if errors.Is(err, productUC.ErrImageNotFound) {
+			response.NotFound(w, "image")
+			return
+		}
+		response.InternalError(w)
+		return
+	}
+
+	response.OK(w, "Gambar produk berhasil dihapus", nil)
+}
+
 // ─── Response Mappers ─────────────────────────────────────────────────────────
 
 func toProductResponse(p domain.Product) map[string]any {

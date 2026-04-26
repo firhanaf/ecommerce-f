@@ -9,13 +9,21 @@ type Config struct {
 	App      AppConfig
 	Database DatabaseConfig
 	JWT      JWTConfig
+	Storage  StorageConfig
 	AWS      AWSConfig
 	Midtrans MidtransConfig
 	Fonnte   FonnteConfig
 }
 
+type StorageConfig struct {
+	Type         string // "local" | "s3" (default: "s3")
+	LocalDir     string // hanya untuk type=local, e.g. "./uploads"
+	LocalBaseURL string // URL publik backend, e.g. "http://localhost:8080"
+}
+
 type FonnteConfig struct {
-	Token string
+	Token      string
+	AdminPhone string // nomor WA admin untuk notifikasi pesanan baru
 }
 
 type AppConfig struct {
@@ -43,6 +51,7 @@ type AWSConfig struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	S3Bucket        string
+	S3Endpoint      string // kosong = AWS S3; isi untuk MinIO/custom (e.g. http://localhost:9000)
 }
 
 type MidtransConfig struct {
@@ -71,6 +80,11 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
+		Storage: StorageConfig{
+			Type:         viper.GetString("STORAGE_TYPE"),
+			LocalDir:     viper.GetString("STORAGE_LOCAL_DIR"),
+			LocalBaseURL: viper.GetString("STORAGE_LOCAL_BASE_URL"),
+		},
 		App: AppConfig{
 			Port: viper.GetString("APP_PORT"),
 			Env:  viper.GetString("APP_ENV"),
@@ -93,6 +107,7 @@ func Load() (*Config, error) {
 			AccessKeyID:     viper.GetString("AWS_ACCESS_KEY_ID"),
 			SecretAccessKey: viper.GetString("AWS_SECRET_ACCESS_KEY"),
 			S3Bucket:        viper.GetString("AWS_S3_BUCKET"),
+			S3Endpoint:      viper.GetString("AWS_S3_ENDPOINT"),
 		},
 		Midtrans: MidtransConfig{
 			ServerKey:  viper.GetString("MIDTRANS_SERVER_KEY"),
@@ -100,7 +115,8 @@ func Load() (*Config, error) {
 			Production: viper.GetBool("MIDTRANS_PRODUCTION"),
 		},
 		Fonnte: FonnteConfig{
-			Token: viper.GetString("FONNTE_TOKEN"),
+			Token:      viper.GetString("FONNTE_TOKEN"),
+			AdminPhone: viper.GetString("FONNTE_ADMIN_PHONE"),
 		},
 	}
 

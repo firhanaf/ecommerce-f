@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"ecommerce-api/pkg/jwt"
 	"ecommerce-api/pkg/response"
@@ -68,11 +70,29 @@ func RequireRole(roles ...string) func(http.Handler) http.Handler {
 
 // ─── Request Logger ───────────────────────────────────────────────────────────
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (sr *statusRecorder) WriteHeader(code int) {
+	sr.status = code
+	sr.ResponseWriter.WriteHeader(code)
+}
+
 func RequestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Bisa diganti ke structured logger (slog, zap) tanpa ubah middleware lain
-		// log.Printf("[%s] %s %s", r.Method, r.URL.Path, r.RemoteAddr)
-		next.ServeHTTP(w, r)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		slog.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"ip", r.RemoteAddr,
+		)
 	})
 }
 

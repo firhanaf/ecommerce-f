@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ var (
 	ErrProductNotFound   = errors.New("product not found")
 	ErrSlugAlreadyExists = errors.New("product slug already exists")
 	ErrVariantNotFound   = errors.New("variant not found")
+	ErrImageNotFound     = errors.New("image not found")
 )
 
 // ─── Input DTOs ───────────────────────────────────────────────────────────────
@@ -167,13 +169,10 @@ func (uc *useCase) CreateProduct(ctx context.Context, input CreateProductInput) 
 		return domain.Product{}, err
 	}
 
-	// generate slug dari name
+	// generate slug dari name; tambah suffix pendek jika sudah dipakai produk lain
 	slug := generateSlug(input.Name)
-
-	// cek slug tidak duplikat
-	existing, _ := uc.productRepo.FindBySlug(ctx, slug)
-	if existing != nil {
-		return domain.Product{}, ErrSlugAlreadyExists
+	if existing, _ := uc.productRepo.FindBySlug(ctx, slug); existing != nil {
+		slug = slug + "-" + uuid.New().String()[:8]
 	}
 
 	now := time.Now()
@@ -269,8 +268,11 @@ func (uc *useCase) ListAll(ctx context.Context, filter ListProductFilter) ([]dom
 		return nil, 0, err
 	}
 
-	// untuk listing, ambil primary image saja (tidak perlu semua)
 	for i := range products {
+		// Load variants untuk hitung stok dan harga di card
+		products[i].Variants, _ = uc.variantRepo.FindByProductID(ctx, products[i].ID)
+
+		// Untuk listing cukup primary image saja
 		images, _ := uc.imageRepo.FindByProductID(ctx, products[i].ID)
 		for _, img := range images {
 			if img.IsPrimary {
@@ -499,21 +501,42 @@ func (uc *useCase) DeleteImage(ctx context.Context, imageID uuid.UUID) error {
 		return fmt.Errorf("delete image: %w", err)
 	}
 	if image == nil {
-		return errors.New("image not found")
+		return ErrImageNotFound
 	}
-	return uc.imageRepo.Delete(ctx, imageID)
+
+	if err := uc.imageRepo.Delete(ctx, imageID); err != nil {
+		return fmt.Errorf("delete image record: %w", err)
+	}
+
+	// hapus file dari S3 — ekstrak key dari URL (best-effort, tidak gagalkan request)
+	if parsed, err := url.Parse(image.URL); err == nil {
+		key := strings.TrimPrefix(parsed.Path, "/")
+		uc.storage.Delete(ctx, key)
+	}
+
+	return nil
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// generateSlug konversi nama produk jadi URL-friendly slug
-// "Kaos Polos Merah" → "kaos-polos-merah"
+// generateSlug konversi nama produk jadi URL-friendly slug.
+// "Kaos Polos (Merah)" → "kaos-polos-merah"
 func generateSlug(name string) string {
 	slug := strings.ToLower(strings.TrimSpace(name))
-	slug = strings.ReplaceAll(slug, " ", "-")
-	// untuk production: tambah uuid suffix agar unik
-	// slug = slug + "-" + uuid.New().String()[:8]
-	return slug
+	var b strings.Builder
+	for _, r := range slug {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ', r == '-', r == '_':
+			b.WriteByte('-')
+		}
+	}
+	result := strings.Trim(b.String(), "-")
+	for strings.Contains(result, "--") {
+		result = strings.ReplaceAll(result, "--", "-")
+	}
+	return result
 }
 
 // newBytesReader wrap []byte menjadi io.Reader untuk upload

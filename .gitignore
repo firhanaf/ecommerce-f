@@ -27,3 +27,7 @@ Thumbs.db
 
 # Temporary
 tmp/
+uploads/
+.claude
+CLAUDE.md
+

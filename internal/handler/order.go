@@ -282,6 +282,80 @@ func (h *OrderHandler) CreateShipment(w http.ResponseWriter, r *http.Request) {
 	response.Created(w, "Shipment berhasil dibuat", toShipmentResponse(shipment))
 }
 
+// GET /api/v1/orders/{id}/shipment — buyer lihat info pengiriman & resi
+func (h *OrderHandler) GetShipment(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w)
+		return
+	}
+
+	orderID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid order id")
+		return
+	}
+
+	shipment, err := h.orderUC.GetShipment(r.Context(), orderID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, orderUC.ErrOrderNotFound):
+			response.NotFound(w, "order")
+		case errors.Is(err, orderUC.ErrUnauthorized):
+			response.Forbidden(w)
+		case errors.Is(err, orderUC.ErrShipmentNotFound):
+			response.NotFound(w, "shipment")
+		default:
+			response.InternalError(w)
+		}
+		return
+	}
+
+	response.OK(w, "Berhasil mendapatkan info pengiriman", toShipmentResponse(shipment))
+}
+
+// PUT /api/v1/admin/orders/{id}/shipment — admin update status pengiriman manual
+func (h *OrderHandler) UpdateShipmentStatus(w http.ResponseWriter, r *http.Request) {
+	actorID, ok := middleware.GetUserIDFromContext(r.Context())
+	if !ok {
+		response.Unauthorized(w)
+		return
+	}
+
+	orderID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.BadRequest(w, "invalid order id")
+		return
+	}
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+	if req.Status == "" {
+		response.BadRequest(w, "status is required")
+		return
+	}
+
+	shipment, err := h.orderUC.UpdateShipmentStatus(r.Context(), orderID, domain.ShipmentStatus(req.Status), actorID)
+	if err != nil {
+		switch {
+		case errors.Is(err, orderUC.ErrShipmentNotFound):
+			response.NotFound(w, "shipment")
+		case errors.Is(err, orderUC.ErrInvalidShipmentStatus):
+			response.BadRequest(w, "status harus salah satu dari: in_transit, delivered, returned")
+		default:
+			response.InternalError(w)
+		}
+		return
+	}
+
+	response.OK(w, "Status pengiriman berhasil diperbarui", toShipmentResponse(shipment))
+}
+
 // ─── Response Mappers ─────────────────────────────────────────────────────────
 
 func toOrderResponse(o *domain.Order) map[string]any {
@@ -333,6 +407,7 @@ func toShipmentResponse(s *domain.Shipment) map[string]any {
 		"tracking_number": s.TrackingNumber,
 		"status":          s.Status,
 		"shipped_at":      s.ShippedAt,
+		"delivered_at":    s.DeliveredAt,
 		"created_at":      s.CreatedAt,
 	}
 }

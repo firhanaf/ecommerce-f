@@ -23,7 +23,14 @@
       "Bash(kill -9 24344)",
       "Bash(echo \"exit: $?\")",
       "Bash(powershell.exe -Command \"Stop-Process -Id 24344 -Force\")",
-      "WebFetch(domain:documenter.getpostman.com)"
+      "WebFetch(domain:documenter.getpostman.com)",
+      "Bash(npx create-next-app@latest ecommerce-web --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git)",
+      "Bash(npm install *)",
+      "Bash(npx shadcn@latest init --defaults)",
+      "Bash(npx shadcn@latest add button input label card badge skeleton dialog sheet toast separator avatar dropdown-menu form select textarea)",
+      "Bash(npx shadcn@latest add button input label card badge skeleton dialog sheet sonner separator avatar dropdown-menu form select textarea)",
+      "Bash(npx tsc *)",
+      "Bash(go get *)"
     ]
   }
 }
